@@ -40,14 +40,13 @@ export function passesFilter(status: MatchStatus, filter: PriceFilter | MatchFil
   if (filter === "missing") return status === "missing";
   if (filter === "rejected") return status === "rejected";
   if (filter === "review") return status === "review" && relation !== "alternative";
+  if (filter === "skipped") return status === "skipped";
   return status === "need";
 }
 
 export function confidenceLabel(confidence: number): string {
-  if (confidence >= 90) return "Высокая";
-  if (confidence >= 70) return "Средняя";
-  if (confidence > 0) return "Низкая";
-  return "—";
+  if (!Number.isFinite(confidence) || confidence <= 0) return "—";
+  return `${Math.round(confidence)}%`;
 }
 
 export function statusLabel(status: MatchStatus): string {
@@ -64,6 +63,8 @@ export function statusLabel(status: MatchStatus): string {
       return "Не работаем";
     case "review":
       return "На проверке";
+    case "skipped":
+      return "Пропущено пока";
   }
 }
 
@@ -74,6 +75,7 @@ export function statusRowClass(status: MatchStatus, unitConflict: boolean): stri
   }
   if (status === "confirmed" || status === "picked") return "bg-green-50";
   if (status === "review") return "bg-orange-50";
+  if (status === "skipped") return "bg-white";
   return "bg-amber-50";
 }
 

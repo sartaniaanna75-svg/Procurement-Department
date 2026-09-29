@@ -1,8 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { AppState, CatalogItem, ColumnMapper, SupplierCard, Upload } from "../types";
 import { absentKey, todayISO } from "../utils/format";
-import { applyAutoMatch, dismissReview, MATCH_LOGIC } from "../utils/matching";
-import { rejectProduct, releaseProduct, saveAlternative, saveAbsent, saveKnownMatch } from "../utils/productMemory";
+import { applyAutoMatch, dismissReview, MATCH_LOGIC, reopenSkipped, skipMatches } from "../utils/matching";
+import { rejectProduct, rejectProducts, releaseProduct, saveAbsents, saveAbsent, saveAlternative, saveKnownMatch } from "../utils/productMemory";
 import { acceptCurrentPrice, setPurchaseNeed, upsertSupplier, type AcceptedPrice } from "../utils/procurement";
 import { loadPersistedState, savePersistedState } from "../utils/persist";
 import { emptyState } from "../utils/storage";
@@ -16,6 +16,7 @@ interface Notice {
 
 interface AppApi {
   state: AppState;
+  analyzing: boolean;
   saveError: string | null;
   notice: Notice | null;
   clearNotice: () => void;
@@ -30,7 +31,11 @@ interface AppApi {
   offerAlternative: (key: string) => void;
   pickMatch: (key: string, code: string) => void;
   markMissing: (key: string) => void;
+  markMissingMany: (keys: string[]) => void;
   rejectMatch: (key: string) => void;
+  rejectMatches: (keys: string[]) => void;
+  skipMatchesMany: (keys: string[]) => void;
+  restoreSkipped: (key: string) => void;
   releaseMatch: (memoryId: string) => void;
   dismissReviewMatch: (key: string) => void;
   confirmOrder: (code: string, supplier: string, price: number) => void;
@@ -42,6 +47,7 @@ const AppStateContext = createContext<AppApi | null>(null);
 export function AppStateProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AppState>(emptyState);
   const [hydrated, setHydrated] = useState(false);
+  const [analyzing, setAnalyzing] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const undoPrice = useRef<AppState | null>(null);
@@ -51,12 +57,20 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     loadPersistedState()
       .then((loaded) => {
         if (!active) return;
-        const next =
-          loaded.uploads.length > 0 && loaded.catalog.length > 0 && loaded.matchLogic < MATCH_LOGIC
-            ? applyAutoMatch(loaded)
-            : loaded;
-        setState(next);
+        const needsMatch = loaded.uploads.length > 0 && loaded.catalog.length > 0 && loaded.matchLogic < MATCH_LOGIC;
+        if (!needsMatch) {
+          setState(loaded);
+          setHydrated(true);
+          return;
+        }
+        setState(loaded);
+        setAnalyzing(true);
         setHydrated(true);
+        window.setTimeout(() => {
+          if (!active) return;
+          setState(applyAutoMatch(loaded));
+          setAnalyzing(false);
+        }, 0);
       })
       .catch(() => {
         if (!active) return;
@@ -68,7 +82,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (!hydrated) return;
+    if (!hydrated || analyzing) return;
     let active = true;
     savePersistedState(state).then((error) => {
       if (active) setSaveError(error);
@@ -76,7 +90,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     return () => {
       active = false;
     };
-  }, [state, hydrated]);
+  }, [state, hydrated, analyzing]);
 
   const commitPrice = useCallback((upload: Upload, mapper: ColumnMapper) => {
     setState((prev) => {
@@ -177,12 +191,12 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   }, [state]);
 
   const pickMatch = useCallback((key: string, code: string) => {
-    setNotice({ tone: "ok", text: "Позиция выбрана. Нажмите «Да», чтобы подтвердить сопоставление." });
+    setNotice({ tone: "ok", text: "Позиция выбрана. Нажмите «Подтвердить», чтобы сохранить сопоставление." });
     setState((prev) => ({
       ...prev,
       matches: {
         ...prev.matches,
-        [key]: { status: "need", code, confidence: 100, reason: "выбрано вручную", relation: "exact" },
+        [key]: { status: "need", code, confidence: 0, reason: "Выбрано вручную", relation: "exact" },
       },
     }));
   }, []);
@@ -192,9 +206,29 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     setState((prev) => saveAbsent(prev, key));
   }, []);
 
+  const markMissingMany = useCallback((keys: string[]) => {
+    setNotice(null);
+    setState((prev) => saveAbsents(prev, keys));
+  }, []);
+
   const rejectMatch = useCallback((key: string) => {
     setNotice(null);
     setState((prev) => rejectProduct(prev, key));
+  }, []);
+
+  const rejectMatches = useCallback((keys: string[]) => {
+    setNotice(null);
+    setState((prev) => rejectProducts(prev, keys));
+  }, []);
+
+  const skipMatchesMany = useCallback((keys: string[]) => {
+    setNotice(null);
+    setState((prev) => skipMatches(prev, keys));
+  }, []);
+
+  const restoreSkipped = useCallback((key: string) => {
+    setNotice(null);
+    setState((prev) => reopenSkipped(prev, key));
   }, []);
 
   const releaseMatch = useCallback((memoryId: string) => {
@@ -235,6 +269,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const api = useMemo<AppApi>(
     () => ({
       state,
+      analyzing,
       saveError,
       notice,
       clearNotice,
@@ -249,7 +284,11 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       offerAlternative,
       pickMatch,
       markMissing,
+      markMissingMany,
       rejectMatch,
+      rejectMatches,
+      skipMatchesMany,
+      restoreSkipped,
       releaseMatch,
       dismissReviewMatch,
       confirmOrder,
@@ -257,6 +296,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     }),
     [
       state,
+      analyzing,
       saveError,
       notice,
       clearNotice,
@@ -271,7 +311,11 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       offerAlternative,
       pickMatch,
       markMissing,
+      markMissingMany,
       rejectMatch,
+      rejectMatches,
+      skipMatchesMany,
+      restoreSkipped,
       releaseMatch,
       dismissReviewMatch,
       confirmOrder,

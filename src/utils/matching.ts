@@ -1,15 +1,26 @@
 import type { AppState, CatalogItem, DisplayRow, MatchDecision, ProductMemory } from "../types";
-import { catalogConflict, passKey, recallProduct, saveKnownMatch, type Recall } from "./productMemory";
+import { catalogConflict, passKey, recallProduct, saveKnownMatch, traitsFromRow, type Recall } from "./productMemory";
 import { listRows } from "./rows";
 import { normCode } from "./text";
 import { unitsConflict } from "./units";
 
-export const MATCH_LOGIC = 2;
+export const MATCH_LOGIC = 6;
+
+/** Веса признаков. Процент считается только по тем, которые удалось сравнить. */
+export const MATCH_WEIGHTS = {
+  barcode: 60,
+  name: 40,
+  brand: 8,
+  measure: 12,
+  pack: 5,
+  unit: 4,
+  supplierCode: 4,
+};
 
 function barcodeDigits(value: string): string {
-  if (/[^\d\s]/.test(value)) return "";
-  const digits = value.replace(/\D/g, "");
-  return digits.length === 8 || digits.length === 12 || digits.length === 13 || digits.length === 14 ? digits : "";
+  const cleaned = value.replace(/[\s.\-–—]/g, "");
+  if (!/^\d+$/.test(cleaned)) return "";
+  return cleaned.length === 8 || cleaned.length === 12 || cleaned.length === 13 || cleaned.length === 14 ? cleaned : "";
 }
 
 const STOP_WORDS = new Set([
@@ -22,45 +33,44 @@ export interface CatalogIndex {
   byCode: Map<string, CatalogItem[]>;
   byBarcode: Map<string, CatalogItem[]>;
   tokenToIds: Map<string, number[]>;
+  frequency: Map<string, number>;
   expanded: Array<Set<string>>;
 }
 
-function tokenize(value: string): string[] {
-  return value
-    .toLowerCase()
-    .replace(/ё/g, "е")
-    .split(/[^\p{L}\p{N}]+/u)
-    .map((token) => token.trim())
-    .filter((token) => token.length >= 2 && !STOP_WORDS.has(token));
+const UNIT_WORDS = new Set(["мл", "ml", "кг", "kg", "гр", "gr", "г", "g", "л", "l", "шт", "штук", "уп", "упак", "pcs"]);
+
+function stemToken(token: string): string {
+  let value = token;
+  const endings = ["ями", "ами", "ого", "ему", "ыми", "ими", "ий", "ый", "ой", "ая", "яя", "ое", "ее", "ые", "ие", "ую", "юю", "ах", "ях", "ов", "ев", "ам", "ям", "ом", "ем"];
+  for (const ending of endings) {
+    if (value.length - ending.length >= 4 && value.endsWith(ending)) {
+      value = value.slice(0, -ending.length);
+      break;
+    }
+  }
+  if (value.length >= 5 && /[аяыиеоую]$/.test(value)) value = value.slice(0, -1);
+  return value;
 }
 
-function expand(tokens: string[]): Set<string> {
-  const bag = new Set(tokens);
-  for (let index = 0; index < tokens.length - 1; index += 1) {
-    if (/^\d+$/.test(tokens[index])) bag.add(tokens[index] + tokens[index + 1]);
-  }
-  for (const token of tokens) {
-    const matched = /^(\d+)([a-zа-я]+)$/i.exec(token);
-    if (!matched) continue;
-    bag.add(matched[1]);
-    bag.add(matched[2]);
-  }
-  return bag;
+function contentStems(value: string): string[] {
+  const prepared = value
+    .toLowerCase()
+    .replace(/ё/g, "е")
+    .replace(/д\s*\/\s*/g, "для ")
+    .replace(/ср\s*[-\/]\s*во/g, "средство ")
+    .replace(/ват\./g, "ватные ")
+    .replace(/т\.(?=[a-zа-я])/g, "туалетный ")
+    .replace(/(\d+(?:[.,]\d+)?)(?=(?:мл|ml|кг|kg|гр|gr|шт|л|l|г|g)\b)/gi, "$1 ");
+  const tokens = prepared
+    .split(/[^\p{L}\p{N}]+/u)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 3 && !/^\d+$/.test(token) && !STOP_WORDS.has(token) && !UNIT_WORDS.has(token));
+  return [...new Set(tokens.map(stemToken))];
 }
 
 function preferUnit(items: CatalogItem[], unit: string): CatalogItem | null {
   if (items.length === 0) return null;
   return items.find((item) => !unitsConflict(unit, item.unit)) ?? items[0];
-}
-
-function applyUnit(decision: MatchDecision, rowUnit: string, item: CatalogItem): MatchDecision {
-  if (!unitsConflict(rowUnit, item.unit)) return decision;
-  const note = "единица не совпала";
-  return {
-    ...decision,
-    confidence: Math.max(0, decision.confidence - 20),
-    reason: decision.reason.includes(note) ? decision.reason : `${decision.reason}, ${note}`,
-  };
 }
 
 export function buildCatalogIndex(catalog: CatalogItem[]): CatalogIndex {
@@ -70,8 +80,7 @@ export function buildCatalogIndex(catalog: CatalogItem[]): CatalogIndex {
   const expanded: Array<Set<string>> = [];
 
   catalog.forEach((item, index) => {
-    const tokens = tokenize(item.name);
-    const bag = expand(tokens);
+    const bag = new Set(contentStems(item.name));
     expanded.push(bag);
     for (const token of bag) {
       if (token.length < 2) continue;
@@ -94,7 +103,9 @@ export function buildCatalogIndex(catalog: CatalogItem[]): CatalogIndex {
     }
   });
 
-  return { items: catalog, byCode, byBarcode, tokenToIds, expanded };
+  const frequency = new Map<string, number>();
+  for (const [token, ids] of tokenToIds) frequency.set(token, ids.length);
+  return { items: catalog, byCode, byBarcode, tokenToIds, frequency, expanded };
 }
 
 function lookupBarcode(index: CatalogIndex, barcode: string, unit: string, exclude?: string): CatalogItem | null {
@@ -108,74 +119,126 @@ function lookupBarcode(index: CatalogIndex, barcode: string, unit: string, exclu
   return preferUnit(merged, unit);
 }
 
-function confidenceFromRatio(ratio: number): number | null {
-  if (ratio >= 0.75) return 75;
-  if (ratio >= 0.5) return 50;
-  return null;
+function nameRatio(leftName: string, rightName: string, frequency?: Map<string, number>): number {
+  const left = contentStems(leftName);
+  const right = new Set(contentStems(rightName));
+  if (left.length === 0 || right.size === 0) return 0;
+  let hitWeight = 0;
+  let total = 0;
+  for (const stem of left) {
+    const freq = frequency?.get(stem) ?? 0;
+    if (frequency && freq === 0) continue;
+    const weight = 1 / Math.log2(2 + Math.max(freq, 1));
+    total += weight;
+    if (right.has(stem)) hitWeight += weight;
+    else if (freq > 0 && freq <= 40) total += weight;
+  }
+  if (total === 0) return 0;
+  return Math.max(0, Math.min(1, hitWeight / total));
 }
 
-function keywordHits(keyword: string, catalogTokens: Set<string>): boolean {
-  if (catalogTokens.has(keyword)) return true;
-  for (const part of expand([keyword])) {
-    if (part !== keyword && part.length >= 2 && catalogTokens.has(part)) return true;
-  }
-  return false;
+function sameBrands(left: string[], right: string[]): boolean {
+  if (left.length === 0 || right.length === 0) return false;
+  const bag = new Set(right);
+  return left.some((token) => bag.has(token));
 }
 
-function fuzzyFind(
-  row: DisplayRow,
-  index: CatalogIndex,
-  exclude?: string,
-): { item: CatalogItem; confidence: number } | null {
-  const keywords = tokenize(row.name);
-  if (keywords.length === 0) return null;
-  const anchors = keywords.filter((keyword) => /\p{L}/u.test(keyword) && keyword.length >= 3);
-  const seeds = anchors.length > 0 ? anchors : keywords;
-  let rarest: number[] = [];
-  for (const keyword of seeds) {
-    for (const token of expand([keyword])) {
-      const list = index.tokenToIds.get(token);
-      if (!list || list.length === 0) continue;
-      if (rarest.length === 0 || list.length < rarest.length) rarest = list;
-    }
-  }
-  const candidateIds = new Set(rarest.slice(0, 400));
+function measuresAgree(leftMl: number, leftG: number, rightMl: number, rightG: number): boolean {
+  if (leftMl > 0 && rightMl > 0 && leftMl !== rightMl) return false;
+  if (leftG > 0 && rightG > 0 && leftG !== rightG) return false;
+  if (leftMl > 0 && leftG === 0 && rightG > 0 && rightMl === 0) return false;
+  if (rightMl > 0 && rightG === 0 && leftG > 0 && leftMl === 0) return false;
+  return leftMl > 0 || leftG > 0;
+}
 
-  let best: { item: CatalogItem; confidence: number; letters: number; unitRank: number; sizeGap: number } | null = null;
-  for (const id of candidateIds) {
-    const item = index.items[id];
-    if (!item || item.code === exclude) continue;
-    const bag = index.expanded[id] ?? new Set<string>();
-    let hits = 0;
-    let letters = 0;
-    for (const keyword of keywords) {
-      if (!keywordHits(keyword, bag)) continue;
-      hits += 1;
-      if (/\p{L}/u.test(keyword)) letters += 1;
-    }
-    const confidence = confidenceFromRatio(hits / keywords.length);
-    if (confidence === null) continue;
-    const candidate = {
-      item,
-      confidence,
-      letters,
-      unitRank: unitsConflict(row.unit, item.unit) ? 0 : 1,
-      sizeGap: Math.abs(bag.size - keywords.length),
-    };
-    if (
-      !best ||
-      candidate.confidence > best.confidence ||
-      (candidate.confidence === best.confidence && candidate.letters > best.letters) ||
-      (candidate.confidence === best.confidence && candidate.letters === best.letters && candidate.unitRank > best.unitRank) ||
-      (candidate.confidence === best.confidence &&
-        candidate.letters === best.letters &&
-        candidate.unitRank === best.unitRank &&
-        candidate.sizeGap < best.sizeGap)
-    ) {
-      best = candidate;
-    }
+function pieceCount(text: string): number {
+  const matched = text.toLowerCase().replace(/ё/g, "е").match(/(\d+)\s*шт/);
+  return matched ? Number(matched[1]) : 0;
+}
+
+/** Процент только из признаков, которые реально удалось сравнить. 0 — оценки нет. */
+function scoreProposal(row: DisplayRow, item: CatalogItem, frequency?: Map<string, number>): { confidence: number; reason: string } {
+  const itemBarcode = barcodeDigits(item.barcode || "") || barcodeDigits(item.code);
+  const rowBarcode = barcodeDigits(row.barcode);
+  const bothBarcodes = Boolean(rowBarcode && itemBarcode);
+  const barcodeMatch = bothBarcodes && rowBarcode === itemBarcode;
+  if (bothBarcodes && !barcodeMatch) return { confidence: 0, reason: "" };
+  const conflict = barcodeMatch ? catalogConflict(row, item.name) : "";
+  const ratio = nameRatio(row.name, item.name, frequency);
+  const left = traitsFromRow(row);
+  const right = traitsFromRow({ ...row, name: item.name, barcode: itemBarcode, volume: "", pack: "" });
+  let possible = 0;
+  let earned = 0;
+  const nameHit = ratio >= 0.45;
+  const bothMeasures = (left.ml > 0 || left.g > 0) && (right.ml > 0 || right.g > 0);
+  const sizeHit = bothMeasures && measuresAgree(left.ml, left.g, right.ml, right.g);
+  const brandHit = sameBrands(left.brands, right.brands);
+  const leftPack = pieceCount(`${row.name} ${row.pack}`);
+  const rightPack = pieceCount(item.name);
+  const bothPacks = leftPack > 0 && rightPack > 0;
+
+  if (bothBarcodes) {
+    possible += MATCH_WEIGHTS.barcode;
+    if (barcodeMatch && !conflict) earned += MATCH_WEIGHTS.barcode;
+    else if (barcodeMatch && conflict) earned += Math.round(MATCH_WEIGHTS.barcode * 0.4);
   }
-  return best ? { item: best.item, confidence: best.confidence } : null;
+  possible += MATCH_WEIGHTS.name;
+  earned += Math.round(MATCH_WEIGHTS.name * ratio);
+  if (left.brands.length > 0 && right.brands.length > 0) {
+    possible += MATCH_WEIGHTS.brand;
+    if (brandHit) earned += MATCH_WEIGHTS.brand;
+  }
+  if (bothMeasures) {
+    possible += MATCH_WEIGHTS.measure;
+    if (sizeHit) earned += MATCH_WEIGHTS.measure;
+  }
+  if (bothPacks) {
+    possible += MATCH_WEIGHTS.pack;
+    if (leftPack === rightPack) earned += MATCH_WEIGHTS.pack;
+  }
+  if (row.unit.trim() && item.unit.trim()) {
+    possible += MATCH_WEIGHTS.unit;
+    if (!unitsConflict(row.unit, item.unit)) earned += MATCH_WEIGHTS.unit;
+  }
+  const codeHit = Boolean(row.supplierCode && row.supplierCode === item.code && (barcodeMatch || nameHit));
+  if (codeHit) {
+    possible += MATCH_WEIGHTS.supplierCode;
+    earned += MATCH_WEIGHTS.supplierCode;
+  }
+  if (possible === 0 || earned <= 0) return { confidence: 0, reason: "" };
+  const confidence = Math.max(1, Math.min(100, Math.round((earned / possible) * 100)));
+  let reason = "Частичное совпадение признаков";
+  if (conflict) reason = conflict;
+  else if (barcodeMatch && nameHit) reason = "Точный штрихкод + название";
+  else if (barcodeMatch) reason = "Точный штрихкод";
+  else if (nameHit && brandHit && sizeHit) reason = "Похожее название + бренд + фасовка";
+  else if (nameHit && sizeHit) reason = "Похожее название + одинаковый объём";
+  else if (nameHit && brandHit) reason = "Похожее название + бренд + фасовка";
+  else if (nameHit) reason = "Похожее название";
+  return { confidence, reason };
+}
+
+function sharedStemCount(stems: string[], bag: Set<string>): number {
+  let hits = 0;
+  for (const stem of stems) if (bag.has(stem)) hits += 1;
+  return hits;
+}
+
+function candidateIds(stems: string[], index: CatalogIndex): number[] {
+  const scores = new Map<number, number>();
+  const known = stems
+    .map((stem) => ({ list: index.tokenToIds.get(stem) ?? [] }))
+    .filter((item) => item.list.length > 0 && item.list.length <= 500)
+    .sort((left, right) => left.list.length - right.list.length)
+    .slice(0, 5);
+  for (const item of known) {
+    const weight = 1 / Math.log2(2 + item.list.length);
+    for (const id of item.list) scores.set(id, (scores.get(id) ?? 0) + weight);
+  }
+  return [...scores.entries()]
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, 40)
+    .map((entry) => entry[0]);
 }
 
 export function suggestMatch(row: DisplayRow, index: CatalogIndex, excludeCode?: string): MatchDecision {
@@ -184,24 +247,36 @@ export function suggestMatch(row: DisplayRow, index: CatalogIndex, excludeCode?:
 
   const byBarcode = lookupBarcode(index, row.barcode, row.unit, excludeCode);
   if (byBarcode) {
+    const scored = scoreProposal(row, byBarcode, index.frequency);
     const conflict = catalogConflict(row, byBarcode.name);
-    if (conflict) {
-      return { status: "review", code: byBarcode.code, confidence: 40, reason: `${conflict}. В каталоге: «${byBarcode.name}».`, relation: "exact" };
-    }
-    if (unitsConflict(row.unit, byBarcode.unit)) {
-      return { status: "review", code: byBarcode.code, confidence: 70, reason: "по штрихкоду, единица не совпала", relation: "exact" };
-    }
-    return { status: "confirmed", code: byBarcode.code, confidence: 100, reason: "по штрихкоду", relation: "exact" };
+    const reason = conflict
+      ? `${conflict}. В каталоге: «${byBarcode.name}».`
+      : unitsConflict(row.unit, byBarcode.unit)
+        ? "Точный штрихкод, единица не совпала"
+        : scored.reason || "Точный штрихкод";
+    return { status: "review", code: byBarcode.code, confidence: scored.confidence, reason, relation: "exact" };
   }
 
-  const fuzzy = fuzzyFind(row, index, excludeCode);
-  if (!fuzzy) return empty;
-  const status = fuzzy.confidence >= 70 ? "review" : "need";
-  return applyUnit(
-    { status, code: fuzzy.item.code, confidence: fuzzy.confidence, reason: "по названию", relation: "exact" },
-    row.unit,
-    fuzzy.item,
-  );
+  const stems = contentStems(row.name);
+  const ranked: Array<{ item: CatalogItem; confidence: number; reason: string }> = [];
+  for (const id of candidateIds(stems, index)) {
+    const item = index.items[id];
+    if (!item || item.code === excludeCode) continue;
+    if (sharedStemCount(stems, index.expanded[id] ?? new Set()) < 2) continue;
+    const scored = scoreProposal(row, item, index.frequency);
+    if (scored.confidence < 40) continue;
+    ranked.push({ item, confidence: scored.confidence, reason: scored.reason });
+  }
+  ranked.sort((left, right) => right.confidence - left.confidence);
+  const best = ranked[0];
+  if (!best) return empty;
+  const second = ranked[1];
+  const ambiguous = Boolean(second && best.confidence - second.confidence < 8 && second.confidence >= 45);
+  const status = ambiguous || best.confidence < 62 ? "review" : "need";
+  const reason = ambiguous ? "Несколько возможных совпадений" : best.reason;
+  const decision: MatchDecision = { status, code: best.item.code, confidence: best.confidence, reason, relation: "exact" };
+  if (!unitsConflict(row.unit, best.item.unit)) return decision;
+  return { ...decision, reason: decision.reason.includes("единица") ? decision.reason : `${decision.reason}, единица не совпала` };
 }
 
 function memoryBuckets(memory: AppState["productMemory"]): Map<string, ProductMemory[]> {
@@ -283,13 +358,15 @@ export function applyAutoMatch(state: AppState, options?: { reconsiderAbsent?: b
       };
       continue;
     }
+    if (previous?.status === "skipped" && recalled.kind === "none") {
+      matches[row.key] = previous;
+      continue;
+    }
     if (previous?.status === "missing" && recalled.kind === "none") {
       matches[row.key] = previous;
       continue;
     }
-    const suggested = suggestMatch(row, index);
-    if (suggested.status === "confirmed" && suggested.code) remember(row.key, suggested);
-    else matches[row.key] = suggested;
+    matches[row.key] = suggestMatch(row, index);
   }
   return { ...state, matches, productMemory, seenReady: true, matchLogic: MATCH_LOGIC };
 }
@@ -310,11 +387,29 @@ function barcodeReview(row: DisplayRow, index: CatalogIndex, recalled: Recall): 
   const reason = conflict
     ? `${conflict}. В каталоге: «${hit.name}».${prior}`
     : `Штрихкод совпадает, но название и характеристики товара существенно отличаются. В каталоге: «${hit.name}».${prior}`;
-  return { status: "review", code: hit.code, confidence: 40, reason, relation: "exact" };
+  return { status: "review", code: hit.code, confidence: scoreProposal(row, hit).confidence, reason, relation: "exact" };
 }
 
 function decisionFromRecall(recalled: Recall): MatchDecision {
   return { status: "review", code: recalled.code, confidence: recalled.confidence, reason: recalled.reason, relation: "exact" };
+}
+
+const OPEN_STATUS = new Set<MatchDecision["status"]>(["need", "review", "skipped"]);
+
+export function skipMatches(state: AppState, keys: string[]): AppState {
+  const matches = { ...state.matches };
+  for (const key of keys) {
+    const current = matches[key] ?? { status: "need" as const, code: "", confidence: 0, reason: "", relation: "exact" as const };
+    if (!OPEN_STATUS.has(current.status)) continue;
+    matches[key] = { ...current, status: "skipped" };
+  }
+  return { ...state, matches };
+}
+
+export function reopenSkipped(state: AppState, key: string): AppState {
+  const row = listRows(state.uploads).find((item) => item.key === key);
+  if (!row) return state;
+  return { ...state, matches: { ...state.matches, [key]: suggestMatch(row, buildCatalogIndex(state.catalog)) } };
 }
 
 export function dismissReview(state: AppState, key: string): AppState {

@@ -1,8 +1,8 @@
-export type MatchStatus = "need" | "confirmed" | "picked" | "missing" | "rejected" | "review";
+export type MatchStatus = "need" | "confirmed" | "picked" | "missing" | "rejected" | "review" | "skipped";
 
 export type PriceFilter = "all" | "need" | "confirmed" | "missing";
 
-export type MatchFilter = "need" | "confirmed" | "missing" | "resolved" | "rejected" | "review";
+export type MatchFilter = "need" | "confirmed" | "missing" | "resolved" | "rejected" | "review" | "skipped";
 
 /** supplier, name, price, barcode, code, unit, filename, stock, pack, multiplicity, supplierCode, volume */
 export type PriceTuple = [

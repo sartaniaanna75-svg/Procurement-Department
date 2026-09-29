@@ -217,7 +217,7 @@ function catalogColumns(headers: string[]): { code: number; name: number; unit: 
 }
 
 function plainBarcode(value: string): string {
-  const trimmed = value.trim();
+  const trimmed = value.replace(/[\s.\-–—]/g, "");
   return /^\d{8}$|^\d{12,14}$/.test(trimmed) ? trimmed : "";
 }
 

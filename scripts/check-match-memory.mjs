@@ -70,12 +70,14 @@ const first = procurement.acceptCurrentPrice(state, {
 check("прайс принят", first.ok);
 state = first.state;
 
-const safe = byName(state, "Порошок автомат 3 кг");
 const safeMatches = rows.listRows(state.uploads).filter((row) => row.name === "Порошок автомат 3 кг");
-const confirmedSafe = safeMatches.find((row) => state.matches[row.key]?.status === "confirmed");
-const conflictSafe = safeMatches.find((row) => state.matches[row.key]?.status === "review");
-check("штрихкод без конфликта подтверждён", Boolean(confirmedSafe) && state.matches[confirmedSafe.key].confidence === 100, statusOf(state, "Порошок автомат 3 кг"));
-check("уверенность высокая", format.confidenceLabel(state.matches[confirmedSafe.key].confidence) === "Высокая");
+const proposed = safeMatches.find((row) => state.matches[row.key]?.code === "4601111111111");
+const conflictSafe = safeMatches.find((row) => row.barcode === "4602222222222");
+const proposedMatch = proposed ? state.matches[proposed.key] : null;
+check("штрихкод даёт предложение и не подтверждает сам", Boolean(proposedMatch) && proposedMatch.status === "review" && proposedMatch.status !== "confirmed", proposedMatch ? `${proposedMatch.status} ${proposedMatch.confidence}` : "");
+check("процент по штрихкоду высокий и настоящий", Boolean(proposedMatch) && proposedMatch.confidence >= 85 && proposedMatch.confidence <= 100, String(proposedMatch?.confidence));
+check("процент показан числом", proposedMatch && format.confidenceLabel(proposedMatch.confidence) === `${proposedMatch.confidence}%` && format.confidenceLabel(0) === "—");
+check("причина про штрихкод", Boolean(proposedMatch) && /штрихкод/i.test(proposedMatch.reason), proposedMatch?.reason ?? "");
 check("конфликт штрихкода на проверке", conflictSafe && state.matches[conflictSafe.key].status === "review" && /существенно изменилось наименование/.test(state.matches[conflictSafe.key].reason), conflictSafe ? state.matches[conflictSafe.key].reason : "нет");
 check("конфликт не подтверждён", !safeMatches.some((row) => state.matches[row.key]?.code === "4602222222222" && state.matches[row.key]?.status === "confirmed"));
 
@@ -92,7 +94,7 @@ const codeOnly = matching.suggestMatch(
 );
 check("код поставщика сам не подтверждает", codeOnly.status !== "confirmed");
 
-const keep = confirmedSafe;
+const keep = proposed;
 const rejectRow = byName(state, "Неизвестный товар поставщика 1");
 state = memory.saveKnownMatch(state, keep.key, { status: "confirmed", code: "4601111111111", confidence: 100, reason: "вручную", relation: "exact" });
 state = memory.rejectProduct(state, rejectRow.key);
@@ -126,9 +128,35 @@ check(
   reusedCode ? state.matches[reusedCode.key]?.reason : "",
 );
 
-const level = format.confidenceLabel(75);
-check("средняя уверенность", level === "Средняя" && format.confidenceLabel(50) === "Низкая");
+check("пропуск не окончательное решение", format.confidenceLabel(64) === "64%" && format.passesFilter("skipped", "skipped") && !format.passesFilter("skipped", "resolved") && !format.passesFilter("skipped", "need"));
 check("всё решено включает отказ и каталог", format.passesFilter("rejected", "resolved") && format.passesFilter("missing", "resolved") && !format.passesFilter("need", "resolved") && !format.passesFilter("review", "resolved"));
+
+const holdName = "Временный товар без решения";
+state = {
+  ...state,
+  uploads: state.uploads.map((upload, index) =>
+    index === 0 ? { ...upload, rows: [...upload.rows, ["Арнест", holdName, 3, "", "", "шт", "arnest-2.xls", "1", "", "", "HOLD", ""]] } : upload,
+  ),
+};
+state = matching.applyAutoMatch(state);
+const hold = rows.listRows(state.uploads).find((row) => row.name === holdName);
+state = matching.skipMatches(state, [hold.key]);
+check("пропуск не пишется как запрет", state.matches[hold.key].status === "skipped" && !Object.values(state.productMemory).some((item) => item.traits.name === holdName));
+const laterName = "Совершенно новый товар без истории";
+state = {
+  ...state,
+  uploads: state.uploads.map((upload, index) =>
+    index === 0 ? { ...upload, rows: [...upload.rows, ["Арнест", laterName, 1, "", "", "шт", "arnest-2.xls", "1", "", "", "NEW-1", ""]] } : upload,
+  ),
+};
+state = matching.applyAutoMatch(state);
+const held = rows.listRows(state.uploads).find((row) => row.name === holdName);
+const appeared = rows.listRows(state.uploads).find((row) => row.name === laterName);
+check("пропущенная позиция остаётся отложенной", held && state.matches[held.key]?.status === "skipped");
+check("новый товар попадает в обработку", Boolean(appeared) && (state.matches[appeared.key]?.status === "need" || state.matches[appeared.key]?.status === "review"));
+state = memory.rejectProducts(state, [appeared.key, held.key]);
+check("массовый отказ запоминается", state.matches[appeared.key]?.status === "rejected");
+check("пропуск не мешает позже отметить не работаем", state.matches[held.key]?.status === "rejected");
 
 await server.close();
 if (failures.length > 0) {

@@ -110,7 +110,7 @@ function normalizeMapper(value: unknown): ColumnMapper | null {
   return mapper;
 }
 
-const STATUSES = new Set<MatchStatus>(["need", "confirmed", "picked", "missing", "rejected", "review"]);
+const STATUSES = new Set<MatchStatus>(["need", "confirmed", "picked", "missing", "rejected", "review", "skipped"]);
 
 function normalizeMatch(value: unknown): MatchDecision | null {
   if (!isPlain(value) || typeof value.status !== "string" || !STATUSES.has(value.status as MatchStatus)) return null;

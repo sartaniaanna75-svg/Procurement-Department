@@ -280,6 +280,28 @@ function writeMemory(state: AppState, row: DisplayRow, verdict: ProductMemory["v
   return { ...state.productMemory, [id]: next };
 }
 
+function isOpen(status: MatchDecision["status"] | undefined): boolean {
+  return status === undefined || status === "need" || status === "review" || status === "skipped";
+}
+
+export function rejectProducts(state: AppState, keys: string[]): AppState {
+  let next = state;
+  for (const key of keys) {
+    if (!isOpen(next.matches[key]?.status)) continue;
+    next = rejectProduct(next, key);
+  }
+  return next;
+}
+
+export function saveAbsents(state: AppState, keys: string[]): AppState {
+  let next = state;
+  for (const key of keys) {
+    if (!isOpen(next.matches[key]?.status)) continue;
+    next = saveAbsent(next, key);
+  }
+  return next;
+}
+
 export function rejectProduct(state: AppState, key: string): AppState {
   const row = listRows(state.uploads).find((item) => item.key === key);
   if (!row) return state;
