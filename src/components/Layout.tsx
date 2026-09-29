@@ -6,8 +6,9 @@ const tabs = [
   { to: "/", label: "Сегодня", end: true },
   { to: "/suppliers", label: "Поставщики", end: false },
   { to: "/prices", label: "Прайсы", end: false },
-  { to: "/matching", label: "Номенклатура", end: false },
+  { to: "/matching", label: "Сопоставление", end: false },
   { to: "/order", label: "Заказ", end: false },
+  { to: "/nomenclature-1c", label: "Номенклатура 1С", end: false },
 ];
 
 export function Layout({ children }: { children: ReactNode }) {

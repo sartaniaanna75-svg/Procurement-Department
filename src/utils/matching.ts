@@ -4,7 +4,7 @@ import { listRows } from "./rows";
 import { normCode } from "./text";
 import { unitsConflict } from "./units";
 
-export const MATCH_LOGIC = 6;
+export const MATCH_LOGIC = 9;
 
 /** Веса признаков. Процент считается только по тем, которые удалось сравнить. */
 export const MATCH_WEIGHTS = {
@@ -108,14 +108,20 @@ export function buildCatalogIndex(catalog: CatalogItem[]): CatalogIndex {
   return { items: catalog, byCode, byBarcode, tokenToIds, frequency, expanded };
 }
 
-function lookupBarcode(index: CatalogIndex, barcode: string, unit: string, exclude?: string): CatalogItem | null {
+function lookupBarcodeCandidates(index: CatalogIndex, barcode: string, exclude?: string): CatalogItem[] {
   const digits = barcodeDigits(barcode);
   const key = digits ? normCode(digits) : "";
   const fromCode = key ? (index.byCode.get(key) ?? []) : [];
   const fromDigits = digits ? (index.byBarcode.get(digits) ?? []) : [];
-  const merged = [...fromCode, ...fromDigits].filter((item, itemIndex, list) => {
+  return [...fromCode, ...fromDigits].filter((item, itemIndex, list) => {
     return item.code !== exclude && list.findIndex((other) => other.code === item.code) === itemIndex;
   });
+}
+
+function lookupBarcode(index: CatalogIndex, barcode: string, unit: string, exclude?: string): CatalogItem | null {
+  const merged = lookupBarcodeCandidates(index, barcode, exclude);
+  const unique = new Set(merged.map((item) => item.code));
+  if (unique.size !== 1) return null;
   return preferUnit(merged, unit);
 }
 
@@ -245,16 +251,21 @@ export function suggestMatch(row: DisplayRow, index: CatalogIndex, excludeCode?:
   const empty: MatchDecision = { status: "need", code: "", confidence: 0, reason: "", relation: "exact" };
   if (index.items.length === 0) return empty;
 
-  const byBarcode = lookupBarcode(index, row.barcode, row.unit, excludeCode);
+  const barcodeHits = lookupBarcodeCandidates(index, row.barcode, excludeCode);
+  const uniqueCodes = new Set(barcodeHits.map((item) => item.code));
+  if (barcodeDigits(row.barcode) && uniqueCodes.size > 1) {
+    return {
+      status: "review",
+      code: "",
+      confidence: 0,
+      reason: "Один штрихкод у нескольких позиций нашей номенклатуры",
+      relation: "exact",
+    };
+  }
+  const byBarcode = uniqueCodes.size === 1 ? preferUnit(barcodeHits, row.unit) : null;
   if (byBarcode) {
-    const scored = scoreProposal(row, byBarcode, index.frequency);
-    const conflict = catalogConflict(row, byBarcode.name);
-    const reason = conflict
-      ? `${conflict}. В каталоге: «${byBarcode.name}».`
-      : unitsConflict(row.unit, byBarcode.unit)
-        ? "Точный штрихкод, единица не совпала"
-        : scored.reason || "Точный штрихкод";
-    return { status: "review", code: byBarcode.code, confidence: scored.confidence, reason, relation: "exact" };
+    const reason = unitsConflict(row.unit, byBarcode.unit) ? "Точный штрихкод, единица не совпала" : "Точный штрихкод";
+    return { status: "review", code: byBarcode.code, confidence: 100, reason, relation: "exact" };
   }
 
   const stems = contentStems(row.name);
@@ -319,6 +330,12 @@ export function applyAutoMatch(state: AppState, options?: { reconsiderAbsent?: b
     const bucket = bucketFor(buckets, row);
     const previous = state.matches[row.key];
     const recalled = recallProduct(productMemory, row, state.reviewPasses, bucket);
+    // Ручное подтверждение важнее нового автопредположения, пока код есть в каталоге.
+    if (previous && (previous.status === "confirmed" || previous.status === "picked") && codes.has(previous.code) && recalled.kind !== "rejected") {
+      matches[row.key] = previous;
+      if (recalled.kind === "none") remember(row.key, previous);
+      continue;
+    }
     const barred = barcodeReview(row, index, recalled);
     if (barred) {
       matches[row.key] = barred;
@@ -326,11 +343,6 @@ export function applyAutoMatch(state: AppState, options?: { reconsiderAbsent?: b
     }
     if (recalled.kind === "review") {
       matches[row.key] = decisionFromRecall(recalled);
-      continue;
-    }
-    if (previous && (previous.status === "confirmed" || previous.status === "picked") && codes.has(previous.code) && recalled.kind !== "rejected") {
-      matches[row.key] = previous;
-      if (recalled.kind === "none") remember(row.key, previous);
       continue;
     }
     if (recalled.kind === "rejected") {

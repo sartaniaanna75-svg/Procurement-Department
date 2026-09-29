@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { CatalogItem } from "../types";
 import { searchCatalog } from "../utils/search";
+import { SourceBadge } from "./SourceBadge";
 
 interface CatalogPickerProps {
   catalog: CatalogItem[];
@@ -40,11 +41,15 @@ export function CatalogPicker({ catalog, top, left, onSelect, onClose }: Catalog
     <div
       ref={panelRef}
       role="dialog"
-      aria-label="Выбор товара"
+      aria-label="Выбор нашей номенклатуры 1С"
       className="fixed z-30 flex max-h-[420px] w-[360px] max-w-[calc(100vw-16px)] flex-col overflow-hidden rounded-[10px] border border-slate-200 bg-white shadow-card"
       style={{ top, left }}
     >
       <div className="border-b border-slate-100 p-3">
+        <div className="mb-2 flex items-center gap-2 text-xs text-mute">
+          <SourceBadge kind="1c" />
+          <span>Наша номенклатура из 1С</span>
+        </div>
         <input
           ref={inputRef}
           className="w-full rounded-lg border border-slate-300 px-2 py-2 text-base"
@@ -66,7 +71,10 @@ export function CatalogPicker({ catalog, top, left, onSelect, onClose }: Catalog
                 className="w-full px-3 py-2 text-left hover:bg-canvas"
                 onClick={() => onSelect(item)}
               >
-                <div className="break-words text-sm">{item.name}</div>
+                <div className="break-words text-sm">
+                  <SourceBadge kind="1c" />
+                  {item.name}
+                </div>
                 <div className="text-xs text-mute">
                   {[item.code, item.barcode, item.unit].filter(Boolean).join(" · ")}
                 </div>

@@ -1,11 +1,11 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import type { AppState, CatalogItem, ColumnMapper, SupplierCard, Upload } from "../types";
+import type { AppState, ColumnMapper, SupplierCard, Upload } from "../types";
 import { absentKey, todayISO } from "../utils/format";
-import { alignCatalog } from "../utils/catalogUpdate";
+import { mergeCatalog, reconcileMatchesAfterCatalog, summarizeUpdate, type CatalogPreview } from "../utils/catalogUpdate";
 import { applyAutoMatch, dismissReview, MATCH_LOGIC, reopenSkipped, skipMatches } from "../utils/matching";
 import { rejectProduct, rejectProducts, releaseProduct, saveAbsents, saveAbsent, saveAlternative, saveKnownMatch } from "../utils/productMemory";
 import { acceptCurrentPrice, setPurchaseNeed, upsertSupplier, type AcceptedPrice } from "../utils/procurement";
-import { loadPersistedState, savePersistedState } from "../utils/persist";
+import { keepSupplierPriceIslands, loadPersistedState, savePersistedState } from "../utils/persist";
 import { emptyState } from "../utils/storage";
 import { createSupplier } from "../utils/suppliers";
 import { supplierKey } from "../utils/text";
@@ -27,7 +27,7 @@ interface AppApi {
   acceptSupplierPrice: (input: AcceptedPrice) => { ok: boolean; reason: string };
   acceptSupplierPrices: (inputs: AcceptedPrice[], card?: SupplierCard) => { ok: boolean; reason: string };
   correctSupplierPrice: (inputs: AcceptedPrice[], card?: SupplierCard) => { ok: boolean; reason: string };
-  commitCatalog: (items: CatalogItem[]) => void;
+  commitCatalog: (preview: CatalogPreview) => void;
   restorePreviousCatalog: () => void;
   confirmMatch: (key: string) => void;
   offerAlternative: (key: string) => void;
@@ -170,17 +170,28 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     return { ok: true, reason: notes.join(" ") };
   }, [applyPrice]);
 
-  const commitCatalog = useCallback((items: CatalogItem[]) => {
+  const commitCatalog = useCallback((preview: CatalogPreview) => {
     setAnalyzing(true);
     window.setTimeout(() => {
       setState((prev) => {
-        const catalog = alignCatalog(prev.catalog, items);
-        return applyAutoMatch({
-          ...prev,
-          catalog,
-          previousCatalog: prev.catalog.length > 0 ? prev.catalog : prev.previousCatalog,
-          catalogUpdatedAt: new Date().toISOString(),
-        });
+        const catalog = mergeCatalog(prev.catalog, preview.items);
+        const reconciled = reconcileMatchesAfterCatalog({ ...prev, catalog });
+        const next = applyAutoMatch(
+          {
+            ...reconciled,
+            previousCatalog: prev.catalog.length > 0 ? prev.catalog : prev.previousCatalog,
+            catalogUpdatedAt: new Date().toISOString(),
+            catalogImportMeta: preview.meta,
+            catalogUpdateSummary: summarizeUpdate(
+              preview,
+              catalog.length,
+              Object.values(reconciled.matches).filter((item) => item.status === "review").length,
+            ),
+          },
+          { reconsiderAbsent: true },
+        );
+        // Каталог и сопоставления обновляются; прайсы и поставщики — нет.
+        return keepSupplierPriceIslands(prev, next);
       });
       setAnalyzing(false);
     }, 0);
@@ -191,12 +202,15 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     window.setTimeout(() => {
       setState((prev) => {
         if (prev.previousCatalog.length === 0) return prev;
-        return applyAutoMatch({
-          ...prev,
-          catalog: prev.previousCatalog,
-          previousCatalog: prev.catalog,
-          catalogUpdatedAt: new Date().toISOString(),
-        });
+        return keepSupplierPriceIslands(
+          prev,
+          applyAutoMatch({
+            ...prev,
+            catalog: prev.previousCatalog,
+            previousCatalog: prev.catalog,
+            catalogUpdatedAt: new Date().toISOString(),
+          }),
+        );
       });
       setAnalyzing(false);
     }, 0);

@@ -1,4 +1,5 @@
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { Catalog1CTab } from "./components/Catalog1CTab";
 import { Layout } from "./components/Layout";
 import { MatchingTab } from "./components/MatchingTab";
 import { OrderTab } from "./components/OrderTab";
@@ -20,6 +21,7 @@ export function App() {
             <Route path="/prices" element={<PricesTab />} />
             <Route path="/matching" element={<MatchingTab />} />
             <Route path="/order" element={<OrderTab />} />
+            <Route path="/nomenclature-1c" element={<Catalog1CTab />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Layout>

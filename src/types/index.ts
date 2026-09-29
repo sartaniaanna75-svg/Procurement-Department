@@ -144,6 +144,27 @@ export interface CatalogItem {
   barcode?: string;
 }
 
+export type ColumnDetectionMode = "headers" | "content";
+
+export interface CatalogImportMeta {
+  mode: ColumnDetectionMode;
+  headerRow: number;
+  nameCol: number;
+  barcodeCol: number;
+  codeCol: number;
+  articleCol: number;
+  unitCol: number;
+}
+
+export interface CatalogUpdateSummary {
+  added: number;
+  changed: number;
+  unchanged: number;
+  removedFromExport: number;
+  needsReview: number;
+  total: number;
+}
+
 export interface ColumnMapper {
   headerRow: number;
   name: number;
@@ -210,6 +231,8 @@ export interface AppState {
   /** Одна предыдущая версия каталога. История файлов не хранится. */
   previousCatalog: CatalogItem[];
   catalogUpdatedAt: string;
+  catalogImportMeta: CatalogImportMeta | null;
+  catalogUpdateSummary: CatalogUpdateSummary | null;
   mappers: Record<string, ColumnMapper>;
   matches: Record<string, MatchDecision>;
   productMemory: Record<string, ProductMemory>;

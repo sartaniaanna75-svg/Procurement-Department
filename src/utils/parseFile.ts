@@ -1,6 +1,7 @@
 import { unzipSync } from "fflate";
 import Papa from "papaparse";
 import * as XLSX from "xlsx";
+import { barcodeFromCell } from "./catalogUpdate";
 
 export const TABLE_ACCEPT = ".xlsx,.xls,.csv,.ods,.html,.htm,.txt";
 export const PRICE_ACCEPT = `${TABLE_ACCEPT},.pdf,.zip`;
@@ -235,12 +236,18 @@ function catalogCell(cell: XLSX.CellObject | undefined): string {
   if (cell.t === "s") return String(cell.v).trim();
   if (cell.t === "n" && typeof cell.v === "number") {
     if (!Number.isFinite(cell.v) || cell.v === 0) return "";
+    const formatted = String(cell.w ?? "").trim().replace(/\s/g, "");
+    if (/^\d+$/.test(formatted)) return formatted;
     if (Number.isSafeInteger(cell.v)) return String(cell.v);
-    const formatted = String(cell.w ?? "").trim();
-    return formatted;
+    const scientific = String(cell.v);
+    const fromScientific = barcodeFromCell(scientific);
+    if (fromScientific) return fromScientific;
+    return formatted || scientific;
   }
   if (cell.t === "b" || cell.t === "d") return "";
-  return String(cell.w ?? cell.v).trim();
+  const fallback = String(cell.w ?? cell.v).trim();
+  const fromText = barcodeFromCell(fallback);
+  return fromText || fallback;
 }
 
 function matrixFromCatalogSheet(sheet: XLSX.WorkSheet): string[][] {

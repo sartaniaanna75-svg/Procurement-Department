@@ -21,7 +21,7 @@ export function OrderTab() {
       <Card title="Заказ на сегодня">
         {readyCount === 0 ? (
           <Hint>
-            Подтвердите товары на <Link className="text-brand underline" to="/matching">вкладке «Номенклатура»</Link>.
+            Подтвердите товары на <Link className="text-brand underline" to="/matching">вкладке «Сопоставление»</Link>.
             Кнопка «Собрать заказ» станет активной, когда появится хотя бы одна подтверждённая или выбранная позиция.
           </Hint>
         ) : (

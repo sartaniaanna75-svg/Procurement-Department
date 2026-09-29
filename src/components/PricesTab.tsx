@@ -9,6 +9,7 @@ import { matchesQuery } from "../utils/search";
 import { unitsConflict } from "../utils/units";
 import { Button, Field, FilterBar, controlClass } from "./Button";
 import { Card, Hint } from "./Card";
+import { SourcedName } from "./SourceBadge";
 
 const filters: Array<{ id: PriceFilter; label: string }> = [
   { id: "all", label: "Все" },
@@ -44,6 +45,7 @@ export function PricesTab() {
   if (!supplier) {
     return (
       <Card title="Сводка по поставщикам">
+        <Hint>Только прайсы поставщиков. Наша номенклатура 1С здесь не отображается.</Hint>
         {summaries.length === 0 ? (
           <Hint>Прайсы ещё не загружены. Добавьте файл на вкладке «Сегодня».</Hint>
         ) : (
@@ -113,7 +115,7 @@ export function PricesTab() {
             </colgroup>
             <thead>
               <tr>
-                {["Номенклатура поставщика", "Цена", "Наша номенклатура", "Состояние"].map((title) => (
+                {["Товар поставщика", "Цена", "Наша номенклатура 1С", "Состояние"].map((title) => (
                   <th
                     key={title}
                     className="sticky top-0 z-10 bg-white px-3 py-2 text-left align-top text-xs font-semibold text-brand shadow-[inset_0_-1px_0_#E5E7EB]"
@@ -132,7 +134,9 @@ export function PricesTab() {
                 return (
                   <tr key={row.key} className={`border-b border-black/5 ${statusRowClass(match.status, conflict)}`}>
                     <td className="break-words px-3 py-2 align-top">
-                      <div>{row.name}</div>
+                      <div>
+                        <SourcedName kind="supplier">{row.name}</SourcedName>
+                      </div>
                       {row.code || row.barcode ? (
                         <div className="mt-1 text-xs text-mute">
                           {[row.code && `код ${row.code}`, row.barcode && `штрихкод ${row.barcode}`].filter(Boolean).join(" · ")}
@@ -142,7 +146,13 @@ export function PricesTab() {
                     <td className="break-words px-3 py-2 align-top tabular-nums">
                       {formatPrice(row.price)} ₽{row.unit ? ` / ${row.unit}` : ""}
                     </td>
-                    <td className="break-words px-3 py-2 align-top">{ourNomenclature(match.code, catalog)}</td>
+                    <td className="break-words px-3 py-2 align-top">
+                      {match.code ? (
+                        <SourcedName kind="1c">{ourNomenclature(match.code, catalog)}</SourcedName>
+                      ) : (
+                        ourNomenclature(match.code, catalog)
+                      )}
+                    </td>
                     <td className="break-words px-3 py-2 align-top">{label}</td>
                   </tr>
                 );

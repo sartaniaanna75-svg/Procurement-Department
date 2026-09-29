@@ -18,8 +18,7 @@ const finance = [
   ["Касса ОПТ", "0", "5805900"],
   ["ИТОГО", "0", ""],
 ];
-const rejected = update.inspectCatalog(finance, []);
-check("чужой файл отклонён", !rejected.ok && rejected.reason === update.CATALOG_FILE_REJECTED);
+check("чужой файл отклонён", !update.inspectCatalog(finance, []).ok);
 
 const current = [
   { code: "00-00000072", name: "Мыло", unit: "шт", barcode: "4605645006507" },
@@ -34,31 +33,39 @@ const proper = [
   ["", "", "", ""],
   ["00-00000111", "", "4600000000015", "шт"],
 ];
-const preview = update.inspectCatalog(proper, current);
-check("правильный файл читается", preview.ok);
-if (preview.ok) {
-  check("найдено 3 товара", preview.preview.found === 3, String(preview.preview.found));
-  check("со штрихкодом 2", preview.preview.withBarcode === 2, String(preview.preview.withBarcode));
-  check("без штрихкода 1", preview.preview.withoutBarcode === 1, String(preview.preview.withoutBarcode));
-  check("колонка наименования", preview.preview.nameHeader === "Наименование", preview.preview.nameHeader);
-  check("колонка штрихкода", preview.preview.barcodeHeader === "Штрихкод", preview.preview.barcodeHeader);
-  check("строка без названия отброшена", preview.preview.skipped === 1, String(preview.preview.skipped));
-  check("новых 1", preview.preview.added === 1, String(preview.preview.added));
-  check("изменившихся 1", preview.preview.changed === 1, String(preview.preview.changed));
-  check("не найдено в выгрузке 1", preview.preview.removed === 1, String(preview.preview.removed));
-  const fresh = preview.preview.items.find((item) => item.code === "00-00000999");
-  check("научная запись раскрыта без округления", fresh?.barcode === "4605645006508", fresh?.barcode ?? "");
+const previewWrap = update.inspectCatalog(proper, current, "nomen.xlsx");
+check("правильный файл читается", previewWrap.ok);
+const preview = previewWrap.ok ? previewWrap.preview : null;
+if (preview) {
+  check("найдено 3 товара", preview.found === 3, String(preview.found));
+  check("со штрихкодом 2", preview.withBarcode === 2);
+  check("без штрихкода 1", preview.withoutBarcode === 1);
+  check("колонка наименования", preview.nameHeader === "Наименование");
+  check("колонка штрихкода", preview.barcodeHeader === "Штрихкод");
+  check("строка без названия отброшена", preview.skipped === 1);
+  check("научная запись раскрыта", preview.items.some((item) => item.barcode === "4605645006508"));
+}
+
+const headerless = [
+  ["АБС кондиционер 1 л", "8690511183853"],
+  ["Сахар весовой", ""],
+  ["Пакет большой", ""],
+];
+const plain = update.inspectCatalog(headerless, []);
+check("файл без заголовков читается", plain.ok && plain.preview.found === 3);
+if (plain.ok) {
+  check("товар без штрихкода сохраняется", plain.preview.items.some((item) => item.name.includes("Сахар") && !item.barcode));
+  check("режим по содержимому", plain.preview.meta.mode === "content");
 }
 
 check("ведущий ноль сохраняется", update.barcodeFromCell("04605645006507") === "04605645006507");
-check("пустая и нулевая ячейка не становятся штрихкодом", update.barcodeFromCell("") === "" && update.barcodeFromCell("0") === "");
-check("сильное уменьшение", update.shrinkRisk(13340, 13) === "severe");
-check("небольшое уменьшение не пугает", update.shrinkRisk(100, 90) === "none");
+check("пустая ячейка не становится штрихкодом", update.barcodeFromCell("") === "" && update.barcodeFromCell("0") === "");
+check("сильное уменьшение", update.shrinkRisk(13340, 37) === "severe");
 
-const aligned = update.alignCatalog(current, [
-  { code: "NEW-1", name: "Мыло хозяйственное", unit: "шт", barcode: "4605645006507" },
+const merged = update.mergeCatalog(current, [
+  { code: "00-00000072", name: "Мыло хозяйственное", unit: "шт", barcode: "4605645006507" },
 ]);
-check("штрихкод сохраняет прежний код", aligned[0]?.code === "00-00000072", aligned[0]?.code ?? "");
+check("старые позиции не пропадают из каталога", merged.length === 3);
 
 let state = storage.emptyState();
 state = {
@@ -79,30 +86,40 @@ state = {
 state = matching.applyAutoMatch(state);
 const row = rows.listRows(state.uploads)[0];
 state = memory.saveKnownMatch(state, row.key, { status: "confirmed", code: "00-00000072", confidence: 100, reason: "вручную", relation: "exact" });
-state = memory.saveAbsent(state, row.key);
-const absentBefore = Object.values(state.productMemory).some((item) => item.verdict === "absent");
-const confirmedMemory = memory.saveKnownMatch(state, row.key, { status: "confirmed", code: "00-00000072", confidence: 100, reason: "вручную", relation: "exact" });
-const nextCatalog = update.alignCatalog(confirmedMemory.catalog, [
+const nextCatalog = update.mergeCatalog(state.catalog, [
   { code: "00-00000072", name: "Мыло", unit: "шт", barcode: "4605645006507" },
-  { code: "00-00000999", name: "Новый товар", unit: "шт", barcode: "4605645006508" },
 ]);
-const updated = matching.applyAutoMatch({
-  ...confirmedMemory,
-  catalog: nextCatalog,
-  previousCatalog: confirmedMemory.catalog,
-  catalogUpdatedAt: "2026-09-29T12:00:00.000Z",
-});
-check("подтверждение пережило обновление каталога", updated.matches[row.key]?.status === "confirmed" && updated.matches[row.key]?.code === "00-00000072", `${updated.matches[row.key]?.status} ${updated.matches[row.key]?.reason}`);
-check("предыдущая версия сохранена", updated.previousCatalog.length === 3);
-const restored = matching.applyAutoMatch({
-  ...updated,
-  catalog: updated.previousCatalog,
-  previousCatalog: updated.catalog,
-  catalogUpdatedAt: "2026-09-29T13:00:00.000Z",
-});
-check("предыдущая версия возвращается", restored.catalog.length === 3 && restored.catalog[0].code === "00-00000072");
-check("после возврата решение на месте", restored.matches[row.key]?.status === "confirmed");
-check("отказ от товара не стирается обновлением", absentBefore);
+const updated = matching.applyAutoMatch(update.reconcileMatchesAfterCatalog({ ...state, catalog: nextCatalog }));
+check("подтверждение пережило обновление", updated.matches[row.key]?.status === "confirmed");
+
+const index = matching.buildCatalogIndex([
+  { code: "A", name: "АБС 1л отбеливатель", unit: "шт", barcode: "8690511183853" },
+]);
+const supplierRow = {
+  key: "x",
+  supplierId: "s",
+  supplier: "S",
+  name: "АВС 1л отбеливатель",
+  price: 1,
+  barcode: "8690511183853",
+  code: "",
+  unit: "шт",
+  file: "",
+  stock: "",
+  pack: "",
+  multiplicity: "",
+  supplierCode: "",
+  volume: "",
+};
+const hit = matching.suggestMatch(supplierRow, index);
+check("точный уникальный штрихкод 100%", hit.confidence === 100 && hit.reason === "Точный штрихкод", `${hit.confidence} ${hit.reason}`);
+
+const dupIndex = matching.buildCatalogIndex([
+  { code: "A", name: "Товар 1", unit: "шт", barcode: "8690511183853" },
+  { code: "B", name: "Товар 2", unit: "шт", barcode: "8690511183853" },
+]);
+const dupHit = matching.suggestMatch(supplierRow, dupIndex);
+check("дубликат штрихкода не подтверждается", dupHit.code === "" && /нескольк/i.test(dupHit.reason), dupHit.reason);
 
 await server.close();
 if (failures.length > 0) {

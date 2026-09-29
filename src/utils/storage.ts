@@ -11,6 +11,8 @@ export function emptyState(): AppState {
     catalog: [],
     previousCatalog: [],
     catalogUpdatedAt: "",
+    catalogImportMeta: null,
+    catalogUpdateSummary: null,
     mappers: {},
     matches: {},
     productMemory: {},
@@ -66,6 +68,33 @@ function normalizeUpload(value: unknown): Upload | null {
     versionId: String(value.versionId ?? ""),
     rows: value.rows.map(normalizeTuple).filter((row): row is PriceTuple => row !== null),
   };
+}
+
+function normalizeCatalogImportMeta(value: unknown): AppState["catalogImportMeta"] {
+  if (!isPlain(value)) return null;
+  const mode = value.mode === "content" ? "content" : value.mode === "headers" ? "headers" : null;
+  if (!mode) return null;
+  return {
+    mode,
+    headerRow: Number(value.headerRow) || 0,
+    nameCol: mapperIndex(value.nameCol),
+    barcodeCol: mapperIndex(value.barcodeCol),
+    codeCol: mapperIndex(value.codeCol),
+    articleCol: mapperIndex(value.articleCol),
+    unitCol: mapperIndex(value.unitCol),
+  };
+}
+
+function normalizeCatalogUpdateSummary(value: unknown): AppState["catalogUpdateSummary"] {
+  if (!isPlain(value)) return null;
+  const added = Number(value.added);
+  const changed = Number(value.changed);
+  const unchanged = Number(value.unchanged);
+  const removedFromExport = Number(value.removedFromExport);
+  const needsReview = Number(value.needsReview);
+  const total = Number(value.total);
+  if (![added, changed, unchanged, removedFromExport, needsReview, total].every(Number.isFinite)) return null;
+  return { added, changed, unchanged, removedFromExport, needsReview, total };
 }
 
 function normalizeCatalogItem(value: unknown): CatalogItem | null {
@@ -396,6 +425,8 @@ export function normalizeState(value: unknown): AppState {
       ? value.previousCatalog.map(normalizeCatalogItem).filter((item): item is CatalogItem => item !== null)
       : [],
     catalogUpdatedAt: String(value.catalogUpdatedAt ?? ""),
+    catalogImportMeta: normalizeCatalogImportMeta(value.catalogImportMeta),
+    catalogUpdateSummary: normalizeCatalogUpdateSummary(value.catalogUpdateSummary),
     mappers: mapValues(value.mappers, normalizeMapper),
     matches: mapValues(value.matches, normalizeMatch),
     productMemory: mapValues(value.productMemory, normalizeMemory),

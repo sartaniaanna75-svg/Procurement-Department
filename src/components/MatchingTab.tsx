@@ -11,6 +11,7 @@ import { unitsConflict } from "../utils/units";
 import { Button, Field, FilterBar, controlClass } from "./Button";
 import { Card, Hint } from "./Card";
 import { CatalogPicker } from "./CatalogPicker";
+import { SourcedName } from "./SourceBadge";
 
 interface PickerState {
   key: string;
@@ -203,6 +204,9 @@ export function MatchingTab() {
 
   return (
     <div className="space-y-4">
+      <Hint>
+        Здесь встречаются две базы: товар поставщика ↔ наша номенклатура 1С. Прайсы загружаются на «Сегодня», каталог 1С — на вкладке «Номенклатура 1С».
+      </Hint>
       <div className="flex flex-wrap items-end gap-3">
         <div className="min-w-[220px]">
           <Field label="Поставщик">
@@ -242,7 +246,13 @@ export function MatchingTab() {
       </p>
       {analyzing ? <Hint>Анализируем номенклатуру...</Hint> : null}
       {state.catalog.length === 0 ? (
-        <Hint>Загрузите номенклатуру из 1С на вкладке «Сегодня», чтобы появились предложения.</Hint>
+        <Hint>
+          Загрузите номенклатуру из 1С на вкладке{" "}
+          <Link className="text-brand underline" to="/nomenclature-1c">
+            «Номенклатура 1С»
+          </Link>
+          , чтобы появились предложения.
+        </Hint>
       ) : null}
       {notice ? (
         <div className={`flex items-center justify-between rounded-lg px-3 py-2 text-sm ${notice.tone === "ok" ? "bg-green-50 text-ok" : "bg-amber-50 text-warn"}`}>
@@ -276,7 +286,7 @@ export function MatchingTab() {
             <table className="w-full min-w-[720px] table-fixed border-collapse text-sm">
               <thead>
                 <tr>
-                  {["Номенклатура поставщика", "Поставщик", "Штрихкод", "Действие"].map((title) => (
+                  {["Товар поставщика", "Поставщик", "Штрихкод", "Действие"].map((title) => (
                     <th
                       key={title}
                       className="sticky top-0 z-10 bg-white px-3 py-2 text-left align-top text-xs font-semibold text-brand shadow-[inset_0_-1px_0_#E5E7EB]"
@@ -289,7 +299,9 @@ export function MatchingTab() {
               <tbody>
                 {rejectedVisible.slice(0, pager.count).map((item) => (
                   <tr key={item.id} className="border-b border-black/5 bg-slate-50">
-                    <td className="break-words px-3 py-2 align-top">{item.traits.name}</td>
+                    <td className="break-words px-3 py-2 align-top">
+                      <SourcedName kind="supplier">{item.traits.name}</SourcedName>
+                    </td>
                     <td className="break-words px-3 py-2 align-top">{item.supplier}</td>
                     <td className="break-words px-3 py-2 align-top">{item.traits.barcode || "—"}</td>
                     <td className="px-3 py-2 align-top">
@@ -304,7 +316,7 @@ export function MatchingTab() {
           </div>
         )
       ) : visible.length === 0 ? (
-        <Card title="Номенклатура">
+        <Card title="Сопоставление">
           <Hint>Нет товаров в этом фильтре.</Hint>
         </Card>
       ) : (
@@ -336,7 +348,7 @@ export function MatchingTab() {
                     <span>Выбрать все отображаемые</span>
                   </label>
                 </th>
-                {["Номенклатура поставщика", "Поставщик", "Предлагаемая наша номенклатура", "Уверенность", "Почему", "Статус", "Действие"].map(
+                {["Товар поставщика", "Поставщик", "Наша номенклатура 1С", "Уверенность", "Почему", "Статус", "Действие"].map(
                   (title) => (
                     <th
                       key={title}
@@ -384,9 +396,17 @@ export function MatchingTab() {
                         onChange={() => toggleOne(row.key)}
                       />
                     </td>
-                    <td className="break-words px-3 py-2 align-top">{row.name}</td>
+                    <td className="break-words px-3 py-2 align-top">
+                      <SourcedName kind="supplier">{row.name}</SourcedName>
+                    </td>
                     <td className="break-words px-3 py-2 align-top">{row.supplier}</td>
-                    <td className="break-words px-3 py-2 align-top">{ourNomenclature(match.code, catalog)}</td>
+                    <td className="break-words px-3 py-2 align-top">
+                      {match.code ? (
+                        <SourcedName kind="1c">{ourNomenclature(match.code, catalog)}</SourcedName>
+                      ) : (
+                        ourNomenclature(match.code, catalog)
+                      )}
+                    </td>
                     <td className="break-words px-3 py-2 align-top">{confidenceLabel(match.confidence)}</td>
                     <td className="break-words px-3 py-2 align-top">{match.reason || "—"}</td>
                     <td className="break-words px-3 py-2 align-top">{label}</td>
