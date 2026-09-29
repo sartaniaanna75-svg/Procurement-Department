@@ -6,9 +6,11 @@ import { PricesTab } from "./components/PricesTab";
 import { TodayTab } from "./components/TodayTab";
 import { AppStateProvider } from "./hooks/useAppState";
 
+const basename = import.meta.env.BASE_URL.replace(/\/$/, "");
+
 export function App() {
   return (
-    <BrowserRouter>
+    <BrowserRouter basename={basename}>
       <AppStateProvider>
         <Layout>
           <Routes>
