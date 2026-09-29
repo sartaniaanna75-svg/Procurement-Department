@@ -23,6 +23,7 @@ export function toRow(tuple: PriceTuple): DisplayRow {
   ] = tuple;
   return {
     key: matchKey(supplier, name, code, barcode, unit),
+    supplierId: "",
     supplier,
     name,
     price,
@@ -44,7 +45,7 @@ export function listRows(uploads: Upload[]): DisplayRow[] {
   for (const upload of sorted) {
     for (const tuple of upload.rows) {
       const row = toRow(tuple);
-      map.set(row.key, row);
+      map.set(row.key, { ...row, supplierId: upload.supplierId || row.supplierId });
     }
   }
   return [...map.values()].sort((a, b) => a.name.localeCompare(b.name, "ru") || a.supplier.localeCompare(b.supplier, "ru"));

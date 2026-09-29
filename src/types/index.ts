@@ -73,13 +73,24 @@ export interface SupplierSchedule {
   reminders: ReminderStage[];
 }
 
+/** Откуда берётся предложение. Сайт и ручной источник не требуют файла прайса. */
+export type OfferSource = "price" | "site" | "manual" | "api";
+
+/** Режим закупки. Расчёт по режиму — отдельная задача, карточка только хранит выбор. */
+export type PurchaseMode = "schedule" | "demand" | "manual" | "mixed";
+
 export interface SupplierCard {
   id: string;
   name: string;
+  fullName: string;
+  comment: string;
   active: boolean;
   responsible: string;
   orderDays: IsoWeekday[];
+  offerSource: OfferSource;
+  purchaseMode: PurchaseMode;
   aliases: string[];
+  priceNames: string[];
   emails: string[];
   inns: string[];
   fileHints: string[];
@@ -208,6 +219,7 @@ export interface AppState {
 
 export interface DisplayRow {
   key: string;
+  supplierId: string;
   supplier: string;
   name: string;
   price: number;

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useAppState } from "../hooks/useAppState";
-import type { IsoWeekday, SupplierCard } from "../types";
-import { createSupplier, oneCStatusLabel, orderDaysLabel, WEEKDAYS } from "../utils/suppliers";
+import type { IsoWeekday, OfferSource, PurchaseMode, SupplierCard } from "../types";
+import { createSupplier, offerSourceLabel, OFFER_SOURCES, oneCStatusLabel, PURCHASE_MODES, purchaseModeLabel, scheduleUsesDays, WEEKDAYS } from "../utils/suppliers";
 import { Button, Field, controlClass } from "./Button";
 import { Card, Hint } from "./Card";
 
@@ -20,7 +20,16 @@ export function SuppliersTab() {
 
   function edit(card: SupplierCard) {
     setError(null);
-    setDraft({ ...card, oneC: { ...card.oneC }, schedule: { ...card.schedule, reminders: [...card.schedule.reminders] }, orderDays: [...card.orderDays] });
+    setDraft({
+      ...card,
+      oneC: { ...card.oneC },
+      schedule: { ...card.schedule, reminders: [...card.schedule.reminders] },
+      orderDays: [...card.orderDays],
+      aliases: [...card.aliases],
+      priceNames: [...card.priceNames],
+      emails: [...card.emails],
+      inns: [...card.inns],
+    });
   }
 
   function toggleDay(day: IsoWeekday) {
@@ -57,13 +66,31 @@ export function SuppliersTab() {
           <div className="mt-3 divide-y divide-slate-100">
             {state.suppliers.map((card) => (
               <div key={card.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
-                <div>
-                  <div className="font-medium">{card.name}{card.active ? "" : " · неактивен"}</div>
-                  <div className="text-sm text-mute">
-                    {card.orderDays.length > 0 ? orderDaysLabel(card.orderDays) : "Дни заказа не заданы"}
-                    {card.responsible ? ` · ${card.responsible}` : ""}
+                <div className="grid flex-1 gap-1 text-sm sm:grid-cols-6">
+                  <div>
+                    <div className="text-xs text-mute">Поставщик</div>
+                    <div className="font-medium">{card.name}</div>
                   </div>
-                  <div className="text-xs text-mute">{oneCStatusLabel(card)}</div>
+                  <div>
+                    <div className="text-xs text-mute">Источник</div>
+                    <div>{offerSourceLabel(card.offerSource)}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-mute">Режим закупки</div>
+                    <div>{purchaseModeLabel(card.purchaseMode)}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-mute">Ответственный</div>
+                    <div>{card.responsible || "—"}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-mute">Связь с 1С</div>
+                    <div>{oneCStatusLabel(card)}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-mute">Состояние</div>
+                    <div>{card.active ? "Активен" : "Неактивен"}</div>
+                  </div>
                 </div>
                 <Button variant="secondary" onClick={() => edit(card)}>
                   Карточка
@@ -77,16 +104,59 @@ export function SuppliersTab() {
       {draft ? (
         <Card title={state.suppliers.some((card) => card.id === draft.id) ? draft.name || "Карточка" : "Новый поставщик"}>
           <div className="space-y-3">
+            <h3 className="text-sm font-semibold text-brand">Основное</h3>
             <Field label="Название в программе">
               <input className={controlClass} value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />
+            </Field>
+            <Field label="Полное название">
+              <input className={controlClass} value={draft.fullName} onChange={(event) => setDraft({ ...draft, fullName: event.target.value })} />
+            </Field>
+            <Field label="ИНН">
+              <input className={controlClass} value={draft.inns.join(", ")} onChange={(event) => setDraft({ ...draft, inns: lines(event.target.value) })} />
+            </Field>
+            <Field label="Ответственный сотрудник">
+              <input className={controlClass} value={draft.responsible} onChange={(event) => setDraft({ ...draft, responsible: event.target.value })} />
+            </Field>
+            <Field label="Комментарий">
+              <textarea className={controlClass} rows={2} value={draft.comment} onChange={(event) => setDraft({ ...draft, comment: event.target.value })} />
             </Field>
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" checked={draft.active} onChange={(event) => setDraft({ ...draft, active: event.target.checked })} />
               Активен
             </label>
-            <Field label="Ответственный сотрудник">
-              <input className={controlClass} value={draft.responsible} onChange={(event) => setDraft({ ...draft, responsible: event.target.value })} />
+            <h3 className="text-sm font-semibold text-brand">Источник закупки</h3>
+            <Field label="Источник предложения">
+              <select
+                className={controlClass}
+                value={draft.offerSource}
+                onChange={(event) => setDraft({ ...draft, offerSource: event.target.value as OfferSource })}
+              >
+                {OFFER_SOURCES.map((item) => (
+                  <option key={item.id} value={item.id}>{item.label}</option>
+                ))}
+              </select>
             </Field>
+            {draft.offerSource === "site" || draft.offerSource === "manual" ? (
+              <Hint>Для этого источника отсутствие файла прайса не считается ошибкой. Автоматическая проверка будет позже.</Hint>
+            ) : null}
+            {draft.offerSource === "api" ? <Hint>Вариант для будущей интеграции. Сейчас он только сохраняется в карточке.</Hint> : null}
+            <h3 className="text-sm font-semibold text-brand">Режим закупки</h3>
+            <Field label="Режим">
+              <select
+                className={controlClass}
+                value={draft.purchaseMode}
+                onChange={(event) => setDraft({ ...draft, purchaseMode: event.target.value as PurchaseMode })}
+              >
+                {PURCHASE_MODES.map((item) => (
+                  <option key={item.id} value={item.id}>{item.label}</option>
+                ))}
+              </select>
+            </Field>
+            <Hint>
+              {scheduleUsesDays(draft.purchaseMode)
+                ? "Дни заказа понадобятся для графика. Сейчас их можно не заполнять."
+                : "Для этого режима фиксированные дни заказа не обязательны."}
+            </Hint>
             <div>
               <div className="mb-1 text-sm font-medium">Дни заказа</div>
               <div className="flex flex-wrap gap-2">
@@ -170,20 +240,23 @@ export function SuppliersTab() {
                 />
               </Field>
             </div>
-            <Field label="Другие названия в прайсах">
-              <textarea className={controlClass} rows={2} value={draft.aliases.join("\n")} onChange={(event) => setDraft({ ...draft, aliases: lines(event.target.value) })} />
-            </Field>
-            <Field label="Email поставщика">
-              <textarea className={controlClass} rows={2} value={draft.emails.join("\n")} onChange={(event) => setDraft({ ...draft, emails: lines(event.target.value) })} />
-            </Field>
-            <Field label="ИНН">
-              <input className={controlClass} value={draft.inns.join(", ")} onChange={(event) => setDraft({ ...draft, inns: lines(event.target.value) })} />
-            </Field>
+            <h3 className="text-sm font-semibold text-brand">Связь с 1С</h3>
             <p className="text-sm font-medium">{oneCStatusLabel(draft)}</p>
             <Hint>Прайс можно загрузить и без связи с 1С. Передача заказа в 1С будет доступна только когда заполнены GUID объектов.</Hint>
             <div className="grid gap-3 sm:grid-cols-2">
               <OneCFields draft={draft} onChange={setDraft} />
             </div>
+            <h3 className="text-sm font-semibold text-brand">Распознавание поставщика</h3>
+            <Hint>Поставщик определяется по совокупности признаков, а не только по имени файла.</Hint>
+            <Field label="Варианты названия">
+              <textarea className={controlClass} rows={2} value={draft.aliases.join("\n")} onChange={(event) => setDraft({ ...draft, aliases: lines(event.target.value) })} />
+            </Field>
+            <Field label="Названия из прайсов">
+              <textarea className={controlClass} rows={2} value={draft.priceNames.join("\n")} onChange={(event) => setDraft({ ...draft, priceNames: lines(event.target.value) })} />
+            </Field>
+            <Field label="Email поставщика">
+              <textarea className={controlClass} rows={2} value={draft.emails.join("\n")} placeholder="Для будущего получения прайса из почты" onChange={(event) => setDraft({ ...draft, emails: lines(event.target.value) })} />
+            </Field>
             {error ? <p className="text-sm text-danger">{error}</p> : null}
             <div className="flex gap-2">
               <Button onClick={save}>Сохранить карточку</Button>

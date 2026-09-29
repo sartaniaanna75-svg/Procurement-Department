@@ -1,4 +1,4 @@
-import type { AppState, CatalogItem, ColumnMapper, DraftOrder, IsoWeekday, MatchDecision, MatchStatus, NotInPriceItem, OneCLink, PricePoint, PriceTuple, PriceWatch, ProductMemory, ProductTraits, ReminderStage, SupplierCard, SupplierSchedule, Upload } from "../types";
+import type { AppState, CatalogItem, ColumnMapper, DraftOrder, IsoWeekday, MatchDecision, MatchStatus, NotInPriceItem, OfferSource, OneCLink, PricePoint, PriceTuple, PriceWatch, ProductMemory, ProductTraits, PurchaseMode, ReminderStage, SupplierCard, SupplierSchedule, Upload } from "../types";
 import { STORAGE_KEY } from "../types";
 import { createSupplier, emptyOneC, emptySchedule } from "./suppliers";
 import { supplierKey } from "./text";
@@ -226,9 +226,14 @@ function normalizeSupplier(value: unknown): SupplierCard | null {
   return {
     ...base,
     active: value.active !== false,
+    fullName: String(value.fullName ?? ""),
+    comment: String(value.comment ?? ""),
     responsible: String(value.responsible ?? ""),
     orderDays: textDays(value.orderDays),
+    offerSource: offerSourceOf(value.offerSource),
+    purchaseMode: purchaseModeOf(value.purchaseMode),
     aliases: textList(value.aliases),
+    priceNames: textList(value.priceNames),
     emails: textList(value.emails),
     inns: textList(value.inns),
     fileHints: textList(value.fileHints),
@@ -237,6 +242,16 @@ function normalizeSupplier(value: unknown): SupplierCard | null {
     oneC: normalizeOneC(value.oneC),
     schedule: normalizeSchedule(value.schedule),
   };
+}
+
+function offerSourceOf(value: unknown): OfferSource {
+  if (value === "site" || value === "manual" || value === "api" || value === "price") return value;
+  return "price";
+}
+
+function purchaseModeOf(value: unknown): PurchaseMode {
+  if (value === "demand" || value === "manual" || value === "mixed" || value === "schedule") return value;
+  return "schedule";
 }
 
 function textDays(value: unknown): IsoWeekday[] {

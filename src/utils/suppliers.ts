@@ -1,4 +1,4 @@
-import type { ColumnMapper, IsoWeekday, OneCLink, SupplierCard, SupplierSchedule } from "../types";
+import type { ColumnMapper, IsoWeekday, OfferSource, OneCLink, PurchaseMode, SupplierCard, SupplierSchedule } from "../types";
 import type { LoadedPriceFile } from "./parseFile";
 import { normalizeText, supplierKey } from "./text";
 
@@ -42,14 +42,33 @@ export function emptySchedule(): SupplierSchedule {
   };
 }
 
+export const OFFER_SOURCES: Array<{ id: OfferSource; label: string }> = [
+  { id: "price", label: "Прайс" },
+  { id: "site", label: "Сайт / личный кабинет" },
+  { id: "manual", label: "Ручной" },
+  { id: "api", label: "API / интеграция" },
+];
+
+export const PURCHASE_MODES: Array<{ id: PurchaseMode; label: string }> = [
+  { id: "schedule", label: "По графику" },
+  { id: "demand", label: "По потребности" },
+  { id: "manual", label: "Ручной" },
+  { id: "mixed", label: "По графику + внепланово по потребности" },
+];
+
 export function createSupplier(name: string, id = ""): SupplierCard {
   return {
     id: id || `sup-${crypto.randomUUID()}`,
     name: name.trim(),
+    fullName: "",
+    comment: "",
     active: true,
     responsible: "",
     orderDays: [],
+    offerSource: "price",
+    purchaseMode: "schedule",
     aliases: [],
+    priceNames: [],
     emails: [],
     inns: [],
     fileHints: [],
@@ -58,6 +77,18 @@ export function createSupplier(name: string, id = ""): SupplierCard {
     oneC: emptyOneC(),
     schedule: emptySchedule(),
   };
+}
+
+export function offerSourceLabel(source: OfferSource): string {
+  return OFFER_SOURCES.find((item) => item.id === source)?.label ?? OFFER_SOURCES[0].label;
+}
+
+export function purchaseModeLabel(mode: PurchaseMode): string {
+  return PURCHASE_MODES.find((item) => item.id === mode)?.label ?? PURCHASE_MODES[0].label;
+}
+
+export function scheduleUsesDays(mode: PurchaseMode): boolean {
+  return mode === "schedule" || mode === "mixed";
 }
 
 export function weekdayLabel(day: IsoWeekday): string {
@@ -171,7 +202,7 @@ function scoreSupplier(
 ): { card: SupplierCard; score: number; reasons: string[] } {
   let score = 0;
   const reasons: string[] = [];
-  const names = unique([card.name, ...card.aliases]);
+  const names = unique([card.name, card.fullName, ...card.aliases, ...card.priceNames]);
   if (signals.email && card.emails.some((email) => email.toLowerCase() === signals.email)) {
     score += 6;
     reasons.push("email отправителя");
@@ -205,18 +236,20 @@ function scoreSupplier(
 }
 
 export function rememberSignals(card: SupplierCard, signals: SupplierSignals, structureHint = ""): SupplierCard {
-  const aliases = [...card.aliases];
+  const known = unique([card.name, card.fullName, ...card.aliases, ...card.priceNames]);
+  const priceNames = [...card.priceNames];
   for (const company of signals.companyNames) {
     const text = company.trim();
-    if (!text || includesText(card.name, text) || includesText(text, card.name)) continue;
-    if (!aliases.some((alias) => includesText(alias, text))) aliases.push(text);
+    if (!text || known.some((name) => includesText(name, text) || includesText(text, name))) continue;
+    priceNames.push(text);
+    known.push(text);
   }
   const fileHint = distinctiveStem(signals.fileName);
   const fileHints = fileHint && !card.fileHints.some((hint) => includesText(hint, fileHint)) ? [...card.fileHints, fileHint] : card.fileHints;
   const sheetHints = unique([...card.sheetHints, ...signals.sheetNames.filter((name) => !/^лист\s*\d*$/i.test(name))]);
   return {
     ...card,
-    aliases,
+    priceNames,
     emails: signals.email ? unique([...card.emails, signals.email]) : card.emails,
     inns: unique([...card.inns, ...signals.inns]),
     fileHints,

@@ -365,7 +365,10 @@ export function upsertSupplier(state: AppState, card: SupplierCard): AppState {
   const nextCard: SupplierCard = {
     ...card,
     name,
+    fullName: card.fullName.trim(),
+    comment: card.comment.trim(),
     orderDays: uniqueDays(card.orderDays),
+    priceNames: cleanList(card.priceNames),
     aliases: cleanList(card.aliases),
     emails: cleanList(card.emails).map((email) => email.toLowerCase()),
     inns: cleanList(card.inns),

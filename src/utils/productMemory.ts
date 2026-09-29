@@ -182,6 +182,7 @@ function linkScore(left: ProductTraits, right: ProductTraits): number {
 }
 
 function sameSupplier(memory: ProductMemory, row: DisplayRow): boolean {
+  if (memory.supplierId && row.supplierId) return memory.supplierId === row.supplierId;
   return supplierKey(memory.supplier) === supplierKey(row.supplier);
 }
 
@@ -238,7 +239,7 @@ function writeMemory(state: AppState, row: DisplayRow, verdict: "rejected" | "ma
   const id = reusable?.id ?? `mem-${crypto.randomUUID()}`;
   const next: ProductMemory = {
     id,
-    supplierId: reusable?.supplierId || supplierIdFor(state, row.supplier),
+    supplierId: reusable?.supplierId || row.supplierId || supplierIdFor(state, row.supplier),
     supplier: row.supplier,
     verdict,
     catalogCode: verdict === "matched" ? decision.code : "",
