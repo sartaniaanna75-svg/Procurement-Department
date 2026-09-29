@@ -3,6 +3,12 @@ import { extractPriceRows } from "./mapping";
 import { loadPriceFiles, parsePrice, type WorkbookSheet } from "./parseFile";
 import { normalizeText } from "./text";
 
+export interface PriceQuestion {
+  field: "price";
+  prompt: string;
+  options: { label: string; column: number }[];
+}
+
 export interface PriceIntakeResult {
   status: "ready" | "review";
   reason: string;
@@ -10,6 +16,8 @@ export interface PriceIntakeResult {
   missing: string[];
   ignored: string[];
   warnings: string[];
+  confidence: "high" | "medium" | "low";
+  question: PriceQuestion | null;
   rows: PriceTuple[];
   mapper: ColumnMapper;
   matrix: string[][];
@@ -40,32 +48,46 @@ function headerKind(header: string): HeaderKind | null {
   const value = normalizeText(header);
   if (!value) return null;
   if (/штрих|(^|[^a-zа-яё0-9])шк([^a-zа-яё0-9]|$)|ean|gtin|barcode|баркод/.test(value)) return "barcode";
-  if (/объ[её]м|\/вес|(^|[^a-zа-яё0-9])вес([^a-zа-яё0-9]|$)|volume|weight/.test(value)) return "volume";
-  if (/ндс|(^|[^a-zа-яё0-9])vat([^a-zа-яё0-9]|$)/.test(value)) return "blocked";
-  if (/паллет|палет|pallet/.test(value)) return "blocked";
-  if (
-    /торгов|марка|(^|[^a-zа-яё0-9])тм([^a-zа-яё0-9]|$)|бренд|brand|trademark|товарн|подгрупп|категор|category|subgroup|(^|[^a-zа-яё0-9])групп([^a-zа-яё0-9]|$)|описан|description|комментар|примечан|логистическ|(^|[^a-zа-яё0-9])статус([^a-zа-яё0-9]|$)/.test(
-      value,
-    )
-  ) {
+  if (/наименование группы|название группы/.test(value)) return "blocked";
+  if (/^(№|n|номер|картинка)$/.test(value) || /процент|квота|(^|[^a-zа-яё0-9])заказ([^a-zа-яё0-9]|$)|(^|[^a-zа-яё0-9])сумма([^a-zа-яё0-9]|$)/.test(value)) {
     return "blocked";
   }
+  if (/наимен|назван|номенклат|^name$|продукц|(^|[^a-zа-яё0-9])описан/.test(value) && !/группы|группа товаров/.test(value)) {
+    return "name";
+  }
+  if (/объ[её]м|\/вес|(^|[^a-zа-яё0-9])вес([^a-zа-яё0-9]|$)|volume|weight/.test(value)) return "volume";
+  if (/ндс|(^|[^a-zа-яё0-9])vat([^a-zа-яё0-9]|$)/.test(value) && !/цена|стоим|прайс/.test(value)) return "blocked";
+  if (/паллет|палет|pallet/.test(value)) return "blocked";
+  if (/торгов|марка|(^|[^a-zа-яё0-9])тм([^a-zа-яё0-9]|$)|бренд|brand|trademark|товарн|подгрупп|категор|category|subgroup|(^|[^a-zа-яё0-9])групп([^a-zа-яё0-9]|$)|комментар|примечан|логистическ|(^|[^a-zа-яё0-9])статус([^a-zа-яё0-9]|$)/.test(value)) {
+    return "blocked";
+  }
+  if (/скидк/.test(value) && !/цена|стоим|прайс/.test(value)) return "blocked";
   if (/код товара|артикул|(^|[^a-zа-яё0-9])sku([^a-zа-яё0-9]|$)|(^|[^a-zа-яё0-9])код([^a-zа-яё0-9]|$)/.test(value)) {
     return "supplierCode";
   }
-  if (/цена|стоим|price|прайс|cost/.test(value)) return "price";
-  if (/остат|налич|доступн|колич|кол-во|qty|stock/.test(value)) return "stock";
+  if (/цена|стоим|прайс|цпрайс|price|cost/.test(value)) return "price";
+  if (/остат|наличи|доступн|колич|кол-во|qty|stock/.test(value)) return "stock";
   if (/кратн|квант/.test(value)) return "multiplicity";
   if (/упаков|фасов|pack|спайк/.test(value)) return "pack";
-  if (/единиц|ед\.?\s*изм|^ед$|(^|[^a-zа-яё0-9])unit([^a-zа-яё0-9]|$)/.test(value)) return "unit";
-  if (/наимен|назван|номенклат|продукц|^name$|product|goods|(^|[^a-zа-яё0-9])товар([^a-zа-яё0-9]|$)/.test(value)) {
-    return "name";
-  }
+  if (/единиц|ед\.?\s*изм|^ед\.?$|(^|[^a-zа-яё0-9])unit([^a-zа-яё0-9]|$)/.test(value)) return "unit";
+  if (/^name$|product|goods|(^|[^a-zа-яё0-9])товар([^a-zа-яё0-9]|$)/.test(value)) return "name";
   return null;
 }
 
+function priceTier(header: string): "working" | "reference" | "threshold" | "money" | "no" {
+  const kind = headerKind(header);
+  if (kind === "blocked" || kind === "volume" || (kind && kind !== "price")) return "no";
+  const value = normalizeText(header);
+  if (/от\s*\d+/.test(value)) return "threshold";
+  if (/регулярн|рознич|закупоч|базов|старая|без скид|без\s*ндс/.test(value)) return "reference";
+  if (kind === "price") return "working";
+  return "money";
+}
+
 function isBarcode(value: string): boolean {
-  return /^\d{8,14}$/.test(value.replace(/[\s-]/g, ""));
+  const tokens = value.match(/\d{8,14}/g) ?? [];
+  if (tokens.length === 0) return false;
+  return value.replace(/\d{8,14}/g, "").replace(/[\s-]/g, "").length === 0;
 }
 
 function isUnitCell(value: string): boolean {
@@ -76,8 +98,10 @@ function isUnitCell(value: string): boolean {
 function isProductName(value: string): boolean {
   const text = value.trim();
   if (text.length < 4 || isBarcode(text) || isUnitCell(text)) return false;
-  if (parsePrice(text) !== null && !/\p{L}/u.test(text)) return false;
-  return (text.match(/\p{L}/gu)?.length ?? 0) >= 3;
+  const letters = text.match(/\p{L}/gu)?.length ?? 0;
+  if (parsePrice(text) !== null && letters === 0) return false;
+  if (parsePrice(text) !== null && letters <= 6 && /руб|₽|€|\$|usd|eur/i.test(text)) return false;
+  return letters >= 3;
 }
 
 function isSupplierCodeCell(value: string): boolean {
@@ -118,8 +142,10 @@ function priceRatio(values: string[]): number {
   let score = 0;
   for (const value of cells) {
     if (isBarcode(value)) continue;
+    const digits = value.replace(/\D/g, "");
+    if (digits.length >= 10 && !/[.,]\d/.test(value) && !/руб|₽/.test(value)) continue;
     const price = parsePrice(value);
-    if (price === null || price <= 0) continue;
+    if (price === null || price <= 0 || price > 10000000) continue;
     if (/[.,]\d/.test(value) || price >= 30) score += 1;
     else score += 0.35;
   }
@@ -190,6 +216,13 @@ function contentRatio(role: Role, values: string[]): number {
   return multiplicityRatio(values);
 }
 
+function numericRatio(values: string[]): number {
+  return ratio(values, (value) => {
+    const price = parsePrice(value);
+    return price !== null && price > 0;
+  });
+}
+
 function scoreColumn(role: Role, header: string, values: string[], support: number): number {
   const kind = headerKind(header);
   if (kind === "blocked" || kind === "volume") return 0;
@@ -201,6 +234,7 @@ function scoreColumn(role: Role, header: string, values: string[], support: numb
   if (role === "barcode" && ratio(values, isBarcode) < 0.5) return 0;
 
   let content = contentRatio(role, values);
+  if (role === "pack" && kind === "pack") content = Math.max(content, numericRatio(values));
   if (role === "name" && kind !== "name" && uniqueness(values) < 0.55) content = 0;
   const headerHit = kind === role ? 6 : 0;
   const minimum = headerHit > 0 ? 0.35 : role === "name" || role === "price" ? 0.55 : 0.65;
@@ -319,26 +353,98 @@ function headerSignals(row: string[]): number {
   return row.filter((cell) => headerKind(cell) !== null).length;
 }
 
+function choosePrice(
+  headers: string[],
+  matrix: string[][],
+  dataStart: number,
+  width: number,
+  used: Set<number>,
+): { index: number; question: PriceQuestion | null } {
+  const candidates: { index: number; tier: "working" | "reference" | "threshold" | "money"; score: number; label: string }[] = [];
+  for (let column = 0; column < width; column += 1) {
+    if (used.has(column)) continue;
+    const header = headers[column] ?? "";
+    const tier = priceTier(header);
+    if (tier === "no" && header.trim()) continue;
+    const values = columnValues(matrix, dataStart, column);
+    if (looksLikeVat(values) && tier !== "working") continue;
+    const score = priceRatio(values);
+    if (score < 0.45 || nonempty(values).length === 0) continue;
+    candidates.push({ index: column, tier: tier === "no" ? "money" : tier, score, label: header.trim() || `колонка ${column + 1}` });
+  }
+  const usable = (tier: "working" | "reference" | "threshold" | "money") =>
+    candidates.filter((item) => item.tier === tier).sort((a, b) => b.score - a.score);
+  const working = usable("working");
+  if (working.length === 1) return { index: working[0].index, question: null };
+  if (working.length > 1) {
+    const close = working.filter((item) => item.score >= working[0].score * 0.85);
+    if (close.length > 1) {
+      return {
+        index: -1,
+        question: {
+          field: "price",
+          prompt: `В прайсе найдено несколько возможных цен: ${close.map((item) => `«${item.label}»`).join(" и ")}. Какую использовать?`,
+          options: close.map((item) => ({ label: item.label, column: item.index })),
+        },
+      };
+    }
+    return { index: working[0].index, question: null };
+  }
+  const reference = usable("reference");
+  if (reference.length === 1) return { index: reference[0].index, question: null };
+  const threshold = usable("threshold");
+  if (threshold.length === 1 && reference.length === 0) return { index: threshold[0].index, question: null };
+  const money = usable("money").filter((item) => item.score >= 0.55);
+  const named = (items: typeof money) => items.filter((item) => item.label && !/^колонка \d+$/.test(item.label));
+  if (money.length === 1) return { index: money[0].index, question: null };
+  const pool = named([...reference, ...threshold, ...money]);
+  if (pool.length > 1) {
+    return {
+      index: -1,
+      question: {
+        field: "price",
+        prompt: `В прайсе найдено несколько возможных цен: ${pool.map((item) => `«${item.label}»`).join(" и ")}. Какую использовать?`,
+        options: pool.map((item) => ({ label: item.label, column: item.index })),
+      },
+    };
+  }
+  if (money.length >= 1) return { index: money[0].index, question: null };
+  return { index: -1, question: null };
+}
+
 function chooseRoles(
   headers: string[],
   matrix: string[][],
   dataStart: number,
-): { mapper: ColumnMapper; reasons: string[] } {
+): { mapper: ColumnMapper; reasons: string[]; question: PriceQuestion | null } {
   const width = Math.max(widthOf(matrix, dataStart), headers.length);
   const banned = new Set<number>();
   let mapper = buildMapper(dataStart - 1, headers, {});
   let reasons: string[] = [];
+  let question: PriceQuestion | null = null;
 
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const chosen: Partial<Record<Role, number>> = {};
     const used = new Set<number>(banned);
     reasons = [];
+    question = null;
     for (const role of ROLES) {
+      if (role === "price") {
+        const priced = choosePrice(headers, matrix, dataStart, width, used);
+        question = priced.question;
+        if (priced.question || priced.index < 0) {
+          if (!priced.question) reasons.push("Не удалось определить колонку «цена».");
+          continue;
+        }
+        chosen.price = priced.index;
+        used.add(priced.index);
+        continue;
+      }
       const ranked = rankRole(role, headers, matrix, dataStart, width, used);
-      const minimum = role === "name" || role === "price" ? REQUIRED_MIN : OPTIONAL_MIN;
-      const ambiguous = ranked.second >= minimum && ranked.second >= ranked.score * 0.85;
+      const minimum = role === "name" ? REQUIRED_MIN : OPTIONAL_MIN;
+      const ambiguous = role === "name" && ranked.second >= minimum && ranked.second >= ranked.score * 0.85;
       if (ranked.score < minimum || ranked.index < 0 || ambiguous) {
-        if (role === "name" || role === "price") {
+        if (role === "name") {
           reasons.push(
             ambiguous
               ? `Не удалось надёжно отличить колонку «${FIELD_TITLE[role].toLowerCase()}» от соседней похожей колонки.`
@@ -353,11 +459,11 @@ function chooseRoles(
     const audited = audit(headers, matrix, dataStart, chosen);
     mapper = buildMapper(dataStart - 1, headers, audited.chosen);
     reasons = [...reasons, ...audited.problems];
-    if (audited.reject.length === 0 || (mapper.name >= 0 && mapper.price >= 0 && audited.problems.length === 0)) break;
+    if (question || audited.reject.length === 0 || (mapper.name >= 0 && mapper.price >= 0 && audited.problems.length === 0)) break;
     for (const index of audited.reject) banned.add(index);
   }
 
-  return { mapper, reasons: [...new Set(reasons)] };
+  return { mapper, reasons: [...new Set(reasons)], question };
 }
 
 function audit(
@@ -419,48 +525,110 @@ function audit(
   return { chosen: next, problems, reject };
 }
 
+interface HeaderBand {
+  headers: string[];
+  dataStart: number;
+}
+
+function filledCount(row: string[]): number {
+  return row.filter((cell) => cell.trim()).length;
+}
+
+function looksLikeDataRow(row: string[]): boolean {
+  const barcode = row.some((cell) => isBarcode(cell));
+  const priced = row.some((cell) => {
+    const price = parsePrice(cell);
+    return price !== null && price > 0;
+  });
+  const named = row.some((cell) => isProductName(cell) && cell.trim().length > 12);
+  return (barcode && priced) || (named && priced);
+}
+
+function headerBand(matrix: string[][], start: number): HeaderBand {
+  let headers = [...(matrix[start] ?? [])];
+  let last = start;
+  for (let offset = 1; offset <= 3; offset += 1) {
+    const next = matrix[start + offset] ?? [];
+    if (looksLikeDataRow(next)) break;
+    const signals = headerSignals(next);
+    if (signals === 0 && filledCount(next) > 1) break;
+    if (signals === 0 && filledCount(next) === 1 && !/^(руб\.?|ед\.?|шт)$/i.test(next.find((cell) => cell.trim()) ?? "")) break;
+    if (signals === 0 && filledCount(next) === 0) continue;
+    const width = Math.max(headers.length, next.length);
+    headers = Array.from({ length: width }, (_, index) => [headers[index] ?? "", next[index] ?? ""].map((cell) => cell.trim()).filter(Boolean).join(" "));
+    last = start + offset;
+  }
+  return { headers, dataStart: last + 1 };
+}
+
 interface SheetDetection {
   mapper: ColumnMapper;
   reasons: string[];
+  question: PriceQuestion | null;
+  headers: string[];
   score: number;
   rows: PriceTuple[];
 }
 
-function detectSheet(matrix: string[][], supplier: string, fileName: string): SheetDetection {
+function findRowKind(matrix: string[][], dataStart: number, mapper: ColumnMapper): number {
+  const used = new Set(
+    [mapper.name, mapper.price, mapper.barcode, mapper.code, mapper.stock, mapper.unit, mapper.pack, mapper.multiplicity, mapper.volume].filter(
+      (index) => index >= 0,
+    ),
+  );
+  const width = widthOf(matrix, dataStart);
+  for (let column = 0; column < width; column += 1) {
+    if (used.has(column)) continue;
+    const values = columnValues(matrix, dataStart, column, 24);
+    if (values.length < 3) continue;
+    const marks = values.filter((value) => /^(группа|строка|шапка|итог|итого)$/.test(normalizeText(value)));
+    if (marks.length / values.length >= 0.5) return column;
+  }
+  return -1;
+}
+
+function detectSheet(matrix: string[][], supplier: string, fileName: string, levels: number[] = []): SheetDetection {
   let best: SheetDetection | null = null;
-  const limit = Math.min(matrix.length, 40);
+  const limit = Math.min(matrix.length, 45);
   for (let index = 0; index < limit; index += 1) {
     const row = matrix[index] ?? [];
-    if (headerSignals(row) < 2) continue;
-    const decision = chooseRoles(row, matrix, index + 1);
-    const extracted = tryExtract(matrix, decision.mapper, supplier, fileName);
-    const reliable = decision.mapper.name >= 0 && decision.mapper.price >= 0 && decision.reasons.length === 0;
-    const score = (reliable ? 20 : 0) + headerSignals(row) + extracted.length;
-    const candidate = { ...decision, score, rows: extracted };
+    if (headerSignals(row) < 1) continue;
+    const band = headerBand(matrix, index);
+    if (headerSignals(band.headers) < 2) continue;
+    const decision = chooseRoles(band.headers, matrix, band.dataStart);
+    const extracted = tryExtract(matrix, decision.mapper, supplier, fileName, levels);
+    const reliable = decision.mapper.name >= 0 && decision.mapper.price >= 0 && decision.reasons.length === 0 && !decision.question;
+    const score = (reliable ? 20 : 0) + headerSignals(band.headers) + extracted.length;
+    const candidate: SheetDetection = { ...decision, headers: band.headers, score, rows: extracted };
     if (!best || candidate.score > best.score) best = candidate;
   }
 
   const headerless = chooseRoles([], matrix, 0);
-  const headerlessRows = tryExtract(matrix, headerless.mapper, supplier, fileName);
-  const headerlessReliable = headerless.mapper.name >= 0 && headerless.mapper.price >= 0 && headerless.reasons.length === 0;
+  const headerlessRows = tryExtract(matrix, headerless.mapper, supplier, fileName, levels);
+  const headerlessReliable = headerless.mapper.name >= 0 && headerless.mapper.price >= 0 && headerless.reasons.length === 0 && !headerless.question;
   const headerlessScore = (headerlessReliable ? 12 : 0) + headerlessRows.length;
   if (!best || (headerlessReliable && headerlessScore > best.score)) {
-    best = { ...headerless, score: headerlessScore, rows: headerlessRows };
+    best = { ...headerless, headers: [], score: headerlessScore, rows: headerlessRows };
   }
   return (
     best ?? {
       mapper: buildMapper(-1, [], {}),
       reasons: ["Не удалось определить колонку «наименование».", "Не удалось определить колонку «цена»."],
+      question: null,
+      headers: [],
       score: 0,
       rows: [],
     }
   );
 }
 
-function tryExtract(matrix: string[][], mapper: ColumnMapper, supplier: string, fileName: string): PriceTuple[] {
+function tryExtract(matrix: string[][], mapper: ColumnMapper, supplier: string, fileName: string, levels: number[] = []): PriceTuple[] {
   if (mapper.name < 0 || mapper.price < 0) return [];
   try {
-    return extractPriceRows(matrix, mapper, supplier, fileName, -1);
+    return extractPriceRows(matrix, mapper, supplier, fileName, -1, {
+      rowKind: findRowKind(matrix, mapper.headerRow, mapper),
+      levels,
+    });
   } catch {
     return [];
   }
@@ -470,15 +638,17 @@ function signatureKey(headers: string[]): string {
   return headers.map((cell) => normalizeText(cell)).filter(Boolean).join("|");
 }
 
-function relocate(matrix: string[][], saved: ColumnMapper): { matrix: string[][]; mapper: ColumnMapper } | null {
+function relocate(matrix: string[][], saved: ColumnMapper): { matrix: string[][]; mapper: ColumnMapper; headers: string[] } | null {
   const expected = signatureKey(saved.headerSignature);
   if (!expected || !saved.labels.name || !saved.labels.price) return null;
-  for (let index = 0; index < matrix.length; index += 1) {
-    const header = matrix[index] ?? [];
-    if (signatureKey(header) !== expected) continue;
-    const find = (label: string) => (label ? header.findIndex((cell) => normalizeText(cell) === label) : -1);
-    const decision = chooseRoles(header, matrix, index + 1);
-    const rebound = buildMapper(index, header, {
+  const limit = Math.min(matrix.length, 45);
+  for (let index = 0; index < limit; index += 1) {
+    if (headerSignals(matrix[index] ?? []) < 1) continue;
+    const band = headerBand(matrix, index);
+    if (signatureKey(band.headers) !== expected) continue;
+    const find = (label: string) => (label ? band.headers.findIndex((cell) => normalizeText(cell) === label) : -1);
+    const decision = chooseRoles(band.headers, matrix, band.dataStart);
+    const rebound = buildMapper(band.dataStart - 1, band.headers, {
       name: find(saved.labels.name),
       price: find(saved.labels.price),
       barcode: find(saved.labels.barcode),
@@ -488,19 +658,19 @@ function relocate(matrix: string[][], saved: ColumnMapper): { matrix: string[][]
       pack: find(saved.labels.pack),
       multiplicity: find(saved.labels.multiplicity),
     });
-    const names = columnValues(matrix, index + 1, rebound.name);
-    const prices = columnValues(matrix, index + 1, rebound.price);
+    const names = columnValues(matrix, band.dataStart, rebound.name);
+    const prices = columnValues(matrix, band.dataStart, rebound.price);
     const sameMeaning =
       rebound.name >= 0 &&
       rebound.price >= 0 &&
       ratio(names, isProductName) >= 0.4 &&
       priceRatio(prices) >= 0.35 &&
       !looksLikeVat(prices) &&
-      headerKind(header[rebound.price] ?? "") !== "blocked" &&
-      headerKind(header[rebound.name] ?? "") !== "blocked";
-    if (!sameMeaning) return null;
+      priceTier(band.headers[rebound.price] ?? "") !== "no" &&
+      headerKind(band.headers[rebound.name] ?? "") !== "blocked";
+    if (!sameMeaning || decision.question) return null;
     if (decision.mapper.name !== rebound.name || decision.mapper.price !== rebound.price) return null;
-    return { matrix, mapper: rebound };
+    return { matrix, mapper: rebound, headers: band.headers };
   }
   return null;
 }
@@ -550,6 +720,8 @@ function emptyResult(reason: string): PriceIntakeResult {
     missing: ["Наименование", "Цена"],
     ignored: [],
     warnings: [],
+    confidence: "low",
+    question: null,
     rows: [],
     mapper,
     matrix: [],
@@ -558,17 +730,21 @@ function emptyResult(reason: string): PriceIntakeResult {
 }
 
 function finish(detection: SheetDetection, sheet: WorkbookSheet): PriceIntakeResult {
-  const headers = detection.mapper.headerRow > 0 ? sheet.matrix[detection.mapper.headerRow - 1] ?? [] : [];
   const fields = report(detection.mapper);
-  const ignored = ignoredHeaders(headers, detection.mapper);
-  const ready = detection.mapper.name >= 0 && detection.mapper.price >= 0 && detection.reasons.length === 0 && detection.rows.length > 0;
+  const ignored = ignoredHeaders(detection.headers, detection.mapper);
+  const ready = detection.mapper.name >= 0 && detection.mapper.price >= 0 && detection.reasons.length === 0 && !detection.question && detection.rows.length > 0;
+  const warnings = detection.mapper.volume >= 0 ? ["Объём или вес сохранён как дополнительный признак и не подменяет наименование."] : [];
+  const unusedPrices = detection.headers.filter((header, index) => index !== detection.mapper.price && priceTier(header) !== "no" && headerKind(header) === "price");
+  if (unusedPrices.length > 0) warnings.push(`Другие цены не использованы: ${unusedPrices.join(", ")}.`);
   return {
     status: ready ? "ready" : "review",
-    reason: ready ? "" : `Уверенности недостаточно, чтобы сохранить прайс. ${detection.reasons.join(" ")}`.trim(),
+    reason: ready ? "" : detection.question?.prompt ?? `Уверенности недостаточно, чтобы сохранить прайс. ${detection.reasons.join(" ")}`.trim(),
     recognized: fields.recognized,
     missing: fields.missing,
     ignored,
-    warnings: detection.mapper.volume >= 0 ? ["Объём или вес сохранён как дополнительный признак и не подменяет наименование."] : [],
+    warnings,
+    confidence: ready ? "high" : detection.question ? "medium" : "low",
+    question: detection.question,
     rows: ready ? detection.rows : [],
     mapper: detection.mapper,
     matrix: sheet.matrix,
@@ -590,13 +766,16 @@ export function ingestPriceSource(
     for (const sheet of sheets) {
       const bound = relocate(sheet.matrix, saved);
       if (!bound) continue;
-      const rows = tryExtract(bound.matrix, bound.mapper, supplier, fileName);
+      const rows = tryExtract(bound.matrix, bound.mapper, supplier, fileName, sheet.levels);
       if (rows.length === 0) continue;
-      return finish({ mapper: bound.mapper, reasons: [], score: rows.length, rows }, { ...sheet, matrix: bound.matrix });
+      return finish(
+        { mapper: bound.mapper, reasons: [], question: null, headers: bound.headers, score: rows.length, rows },
+        { ...sheet, matrix: bound.matrix },
+      );
     }
   }
 
-  const detected = sheets.map((sheet) => ({ sheet, detection: detectSheet(sheet.matrix, supplier, fileName) }));
+  const detected = sheets.map((sheet) => ({ sheet, detection: detectSheet(sheet.matrix, supplier, fileName, sheet.levels) }));
   detected.sort((a, b) => b.detection.score - a.detection.score);
   const readySheets = detected.filter(
     (item) => item.detection.reasons.length === 0 && item.detection.rows.length > 0 && item.detection.mapper.name >= 0,
@@ -609,6 +788,20 @@ export function ingestPriceSource(
   const winner = detected[0];
   if (!winner) return emptyResult("Не удалось найти товарную таблицу.");
   return finish(winner.detection, winner.sheet);
+}
+
+export function acceptPriceColumn(
+  result: PriceIntakeResult,
+  column: number,
+  supplier: string,
+  fileName: string,
+): PriceIntakeResult {
+  const mapper = { ...result.mapper, price: column };
+  const rows = tryExtract(result.matrix, mapper, supplier, fileName);
+  if (rows.length === 0) {
+    return { ...result, status: "review", question: null, confidence: "low", reason: "В выбранной колонке нет цен.", rows: [], mapper };
+  }
+  return { ...result, status: "ready", question: null, confidence: "high", reason: "", rows, mapper };
 }
 
 export async function normalizePriceFile(

@@ -22,7 +22,7 @@ export function parsePrice(raw: string): number | null {
       source = source.replace(/,/g, "");
     }
   } else if (hasComma) {
-    source = source.replace(",", ".");
+    source = /,\d{3}$/.test(source) ? source.replace(/,/g, "") : source.replace(",", ".");
   }
 
   if (!/^-?\d+(\.\d+)?$/.test(source)) {
@@ -69,28 +69,48 @@ function parseHtml(text: string): string[][] {
 export interface WorkbookSheet {
   name: string;
   matrix: string[][];
+  /** Уровень группировки Excel по строкам матрицы. 0 — нет вложенности. */
+  levels?: number[];
 }
 
 function cleanMatrix(rows: string[][]): string[][] {
   return rows.filter((row) => row.some((cell) => cell.trim() !== ""));
 }
 
-function matrixFromSheet(sheet: XLSX.WorkSheet): string[][] {
+function cellText(value: unknown): string {
+  const text = String(value ?? "").trim();
+  if (/^\d+(\.\d+)?e\+\d+$/i.test(text)) {
+    const numeric = Number(text);
+    if (Number.isFinite(numeric) && numeric >= 1_000_000) return String(Math.round(numeric));
+  }
+  return text;
+}
+
+function matrixFromSheet(sheet: XLSX.WorkSheet): { matrix: string[][]; levels: number[] } {
   const rows = XLSX.utils.sheet_to_json<(string | number | boolean | null)[]>(sheet, {
     header: 1,
     raw: false,
     defval: "",
   });
-  return cleanMatrix(rows.map((row) => (row ?? []).map((cell) => String(cell ?? "").trim())));
+  const outline = sheet["!rows"] ?? [];
+  const matrix: string[][] = [];
+  const levels: number[] = [];
+  rows.forEach((row, index) => {
+    const cells = (row ?? []).map((cell) => cellText(cell));
+    if (!cells.some((cell) => cell.trim())) return;
+    matrix.push(cells);
+    levels.push(Number(outline[index]?.level) || 0);
+  });
+  return { matrix, levels };
 }
 
 function parseWorkbook(buffer: ArrayBuffer): WorkbookSheet[] {
   const workbook = XLSX.read(buffer, { type: "array" });
   if (workbook.SheetNames.length === 0) throw new Error("В книге нет листов");
-  return workbook.SheetNames.map((name) => ({
-    name,
-    matrix: matrixFromSheet(workbook.Sheets[name]),
-  })).filter((sheet) => sheet.matrix.length > 0);
+  return workbook.SheetNames.map((name) => {
+    const parsed = matrixFromSheet(workbook.Sheets[name]);
+    return { name, matrix: parsed.matrix, levels: parsed.levels };
+  }).filter((sheet) => sheet.matrix.length > 0);
 }
 
 export interface LoadedPriceFile {
@@ -138,10 +158,18 @@ async function expandNamed(name: string, buffer: ArrayBuffer, depth: number): Pr
   const lower = name.toLowerCase();
   const bytes = new Uint8Array(buffer);
   if (lower.endsWith(".pdf") || isPdf(bytes)) {
-    const { extractPdfMatrix } = await import("./pdfTables");
-    const extracted = await extractPdfMatrix(buffer);
-    if (!extracted.textual) return [{ fileName: name, sheets: [], unreadable: SCAN_NOTE }];
-    return [{ fileName: name, sheets: [{ name, matrix: extracted.matrix }], unreadable: null }];
+    const { extractPdfPages } = await import("./pdfTables");
+    const pages = await extractPdfPages(buffer);
+    const textual = pages.some((matrix) => {
+      const filled = matrix.reduce((sum, row) => sum + row.filter((cell) => cell.trim()).length, 0);
+      return filled >= 4 && matrix.some((row) => row.filter((cell) => cell.trim()).length >= 2);
+    });
+    if (!textual) return [{ fileName: name, sheets: [], unreadable: SCAN_NOTE }];
+    return [{
+      fileName: name,
+      sheets: pages.map((matrix, index) => ({ name: `Страница ${index + 1}`, matrix })),
+      unreadable: null,
+    }];
   }
   const archive = lower.endsWith(".zip") || (isZip(bytes) && !spreadsheetName(lower));
   if (archive && !spreadsheetName(lower)) {

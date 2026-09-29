@@ -101,33 +101,67 @@ function cell(row: string[], index: number): string {
   return (row[index] ?? "").trim();
 }
 
+export interface ExtractOptions {
+  rowKind?: number;
+  levels?: number[];
+}
+
+function sectionName(name: string): boolean {
+  const cleaned = name
+    .trim()
+    .toLowerCase()
+    .replace(/ё/g, "е")
+    .replace(/[!*._]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return /^(акция|новинка|группа|группы|итог|итого|всего|total|sum|товар|товары|склад|прочее)$/.test(cleaned);
+}
+
+function barcodeTokens(value: string): string[] {
+  return (value.match(/\d{8,14}/g) ?? []).filter((token) => /^\d{8,14}$/.test(token));
+}
+
+function chosenBarcode(value: string): string {
+  const tokens = barcodeTokens(value);
+  if (tokens.length === 0) return "";
+  const withZero = tokens.find((token) => token.startsWith("0"));
+  if (withZero) return withZero;
+  return tokens.find((token) => token.length === 13) ?? tokens[0];
+}
+
+function quantityText(value: string): string {
+  const matched = value.trim().match(/^(\d+)\.000$/);
+  return matched ? matched[1] : value.trim();
+}
+
 export function extractPriceRows(
   matrix: string[][],
   mapper: ColumnMapper,
   fallbackSupplier: string,
   fileName: string,
   supplierCol: number,
+  options: ExtractOptions = {},
 ): PriceTuple[] {
   const start = mapper.headerRow;
+  const levels = options.levels ?? [];
   const unique = new Map<string, PriceTuple>();
-  let misses = 0;
   for (let index = start; index < matrix.length; index += 1) {
     const row = matrix[index] ?? [];
+    if (levels.length > 0 && index + 1 < levels.length && levels[index] < levels[index + 1]) continue;
+    if ((options.rowKind ?? -1) >= 0) {
+      const kind = cell(row, options.rowKind ?? -1).trim().toLowerCase().replace(/ё/g, "е");
+      if (kind && kind !== "строка" && kind !== "товар") continue;
+    }
     const name = cell(row, mapper.name);
     const price = parsePrice(cell(row, mapper.price));
-    if (!name || price === null || /^(итог|итого|всего|total|sum)[:\s]*$/i.test(name)) {
-      if (unique.size > 0) misses += 1;
-      if (misses >= 5) break;
-      continue;
-    }
-    misses = 0;
+    if (!name || sectionName(name) || price === null || price <= 0) continue;
     const supplier = cell(row, supplierCol) || fallbackSupplier.trim();
     if (!supplier) continue;
-    const barcode = cell(row, mapper.barcode);
+    const barcode = chosenBarcode(cell(row, mapper.barcode));
     const unit = cell(row, mapper.unit);
-    const stock = cell(row, mapper.stock);
-    const pack = cell(row, mapper.pack);
-    const multiplicity = cell(row, mapper.multiplicity);
+    const stock = quantityText(cell(row, mapper.stock));
+    const pack = quantityText(cell(row, mapper.pack));
+    const multiplicity = quantityText(cell(row, mapper.multiplicity));
     const supplierCode = cell(row, mapper.code);
     const volume = cell(row, mapper.volume);
     const tuple: PriceTuple = [

@@ -3,7 +3,7 @@ import { useAppState } from "../hooks/useAppState";
 import { plural } from "../utils/format";
 import { parseCatalog } from "../utils/mapping";
 import { PRICE_ACCEPT, TABLE_ACCEPT, readMatrix } from "../utils/parseFile";
-import { normalizePriceFile } from "../utils/priceIntake";
+import { acceptPriceColumn, normalizePriceFile, type NormalizedPriceDocument } from "../utils/priceSkill";
 import { supplierKey } from "../utils/text";
 import { Button, Field, controlClass } from "./Button";
 import { Card, Hint } from "./Card";
@@ -19,6 +19,7 @@ export function TodayTab() {
   const [supplier, setSupplier] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [report, setReport] = useState<PriceReport | null>(null);
+  const [choice, setChoice] = useState<NormalizedPriceDocument | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [busy, setBusy] = useState<"price" | "catalog" | null>(null);
@@ -28,6 +29,7 @@ export function TodayTab() {
     setError(null);
     setInfo(null);
     setReport(null);
+    setChoice(null);
     const name = supplier.trim();
     if (!file) {
       setError("Выберите файл прайса.");
@@ -58,6 +60,7 @@ export function TodayTab() {
           if (result.warnings.length > 0) lines.push(result.warnings.join(" "));
           continue;
         }
+        if (result.question && !choice) setChoice(result);
         lines.push(`«${result.fileName}»: ${result.reason}`);
         if (result.recognized.length > 0) lines.push(`Распознано: ${result.recognized.join(", ")}.`);
         if (result.missing.length > 0) lines.push(`Не распознано: ${result.missing.join(", ")}.`);
@@ -137,6 +140,36 @@ export function TodayTab() {
             <Button onClick={() => void readPrice()} disabled={busy !== null}>
               {busy === "price" ? "Читаем файл…" : "Прочитать файл"}
             </Button>
+            {choice?.question ? (
+              <div className="space-y-2 text-sm">
+                <p>{choice.question.prompt}</p>
+                <div className="flex flex-wrap gap-2">
+                  {choice.question.options.map((option) => (
+                    <Button
+                      key={option.column}
+                      variant="secondary"
+                      onClick={() => {
+                        const picked = acceptPriceColumn(choice, option.column, supplier.trim(), choice.fileName);
+                        if (picked.status !== "ready") {
+                          setError(picked.reason);
+                          return;
+                        }
+                        commitPrice(
+                          { file: choice.fileName, supplier: supplier.trim(), uploadedAt: new Date().toISOString(), rows: picked.rows },
+                          picked.mapper,
+                        );
+                        setInfo(`Выбрана цена «${option.label}». Структура поставщика запомнена.`);
+                        setChoice(null);
+                        setFile(null);
+                        if (priceInputRef.current) priceInputRef.current.value = "";
+                      }}
+                    >
+                      {option.label}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
             {report ? (
               <div className={`space-y-1 text-sm ${report.tone === "ok" ? "text-ok" : "text-ink"}`}>
                 {report.lines.map((line, index) => (
