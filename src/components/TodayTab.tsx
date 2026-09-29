@@ -2,16 +2,9 @@ import { useRef, useState } from "react";
 import type { ColumnMapper } from "../types";
 import { useAppState } from "../hooks/useAppState";
 import { plural } from "../utils/format";
-import {
-  columnChoicesOverlap,
-  detectAt,
-  extractPriceRows,
-  findSupplierCol,
-  mapperFits,
-  parseCatalog,
-  resolveHeader,
-} from "../utils/mapping";
-import { TABLE_ACCEPT, readMatrix } from "../utils/parseFile";
+import { columnChoicesOverlap, extractPriceRows, parseCatalog } from "../utils/mapping";
+import { TABLE_ACCEPT, readMatrix, readSheets } from "../utils/parseFile";
+import { detectionAt, finalizeMapper, ingestPriceSource } from "../utils/priceIntake";
 import { supplierKey } from "../utils/text";
 import { Button, Field, controlClass } from "./Button";
 import { Card, Hint } from "./Card";
@@ -31,8 +24,6 @@ export function TodayTab() {
   const { state, commitPrice, commitCatalog } = useAppState();
   const [formOpen, setFormOpen] = useState(true);
   const [supplier, setSupplier] = useState("");
-  const [headerRow, setHeaderRow] = useState("1");
-  const [remap, setRemap] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [pending, setPending] = useState<PendingPrice | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -44,7 +35,6 @@ export function TodayTab() {
     setError(null);
     setInfo(null);
     const name = supplier.trim();
-    const rowNumber = Number(headerRow);
     if (!file) {
       setError("Выберите файл прайса.");
       return;
@@ -53,40 +43,31 @@ export function TodayTab() {
       setError("Укажите имя поставщика.");
       return;
     }
-    if (!Number.isInteger(rowNumber) || rowNumber < 1) {
-      setError("Строка заголовков должна быть целым числом от 1.");
-      return;
-    }
     setBusy("price");
     try {
-      const matrix = await readMatrix(file);
-      if (rowNumber > matrix.length) {
-        setError("Строка заголовков выходит за пределы файла.");
-        return;
-      }
-      const saved = state.mappers[supplierKey(name)];
-      if (saved && !remap && mapperFits(saved, matrix)) {
-        const supplierCol = findSupplierCol(matrix[saved.headerRow - 1] ?? []);
-        const rows = extractPriceRows(matrix, saved, name, file.name, supplierCol);
-        commitPrice({ file: file.name, supplier: name, uploadedAt: new Date().toISOString(), rows }, saved);
+      const sheets = await readSheets(file);
+      const result = ingestPriceSource(sheets, name, file.name, state.mappers[supplierKey(name)] ?? null);
+      if (result.status === "ready") {
+        commitPrice(
+          { file: file.name, supplier: name, uploadedAt: new Date().toISOString(), rows: result.rows },
+          result.mapper,
+        );
         setPending(null);
         setFile(null);
         if (priceInputRef.current) priceInputRef.current.value = "";
-        setInfo(`Файл «${file.name}»: ${rows.length} ${plural(rows.length, "позиция", "позиции", "позиций")}. Формат поставщика уже был известен.`);
+        setInfo(
+          `Файл «${file.name}» разобран автоматически: ${result.rows.length} ${plural(result.rows.length, "позиция", "позиции", "позиций")}.`,
+        );
         return;
       }
-      const detected = resolveHeader(matrix, rowNumber);
       setPending({
         fileName: file.name,
         supplier: name,
-        matrix,
-        headerRow: detected.headerRow,
-        mapper: detected.mapper,
-        supplierCol: detected.supplierCol,
-        note:
-          detected.headerRow === rowNumber
-            ? null
-            : `В строке ${rowNumber} не нашлись название и цена. Заголовки найдены в строке ${detected.headerRow}.`,
+        matrix: result.matrix,
+        headerRow: Math.max(result.mapper.headerRow, 1),
+        mapper: result.mapper,
+        supplierCol: -1,
+        note: result.reason,
       });
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Не удалось прочитать файл");
@@ -97,13 +78,11 @@ export function TodayTab() {
 
   function changePendingHeader(value: number) {
     if (!pending || !Number.isInteger(value) || value < 1 || value > pending.matrix.length) return;
-    const detected = detectAt(pending.matrix, value);
     setPending({
       ...pending,
       headerRow: value,
-      mapper: detected.mapper,
-      supplierCol: detected.supplierCol,
-      note: null,
+      mapper: detectionAt(pending.matrix, value),
+      note: pending.note,
     });
   }
 
@@ -119,16 +98,15 @@ export function TodayTab() {
       return;
     }
     try {
-      const mapper = { ...pending.mapper, headerRow: pending.headerRow };
-      const rows = extractPriceRows(pending.matrix, mapper, pending.supplier, pending.fileName, pending.supplierCol);
+      const mapper = finalizeMapper(pending.matrix, { ...pending.mapper, headerRow: pending.headerRow });
+      const rows = extractPriceRows(pending.matrix, mapper, pending.supplier, pending.fileName, -1);
       commitPrice(
         { file: pending.fileName, supplier: pending.supplier, uploadedAt: new Date().toISOString(), rows },
         mapper,
       );
-      setInfo(`Файл «${pending.fileName}»: ${rows.length} ${plural(rows.length, "позиция", "позиции", "позиций")}. Формат сохранён.`);
+      setInfo(`Файл «${pending.fileName}»: ${rows.length} ${plural(rows.length, "позиция", "позиции", "позиций")}. Структура сохранена и будет проверяться при следующей загрузке.`);
       setPending(null);
       setFile(null);
-      setRemap(false);
       if (priceInputRef.current) priceInputRef.current.value = "";
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Не удалось загрузить прайс");
@@ -182,25 +160,12 @@ export function TodayTab() {
                 }}
               />
             </div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="Имя поставщика">
-                <input className={controlClass} value={supplier} onChange={(event) => setSupplier(event.target.value)} />
-              </Field>
-              <Field label="Строка с заголовками">
-                <input
-                  className={controlClass}
-                  type="number"
-                  min={1}
-                  value={headerRow}
-                  onChange={(event) => setHeaderRow(event.target.value)}
-                />
-              </Field>
-            </div>
-            <label className="flex items-center gap-2 text-sm text-mute">
-              <input type="checkbox" checked={remap} onChange={(event) => setRemap(event.target.checked)} />
-              Указать колонки заново
-            </label>
-            <Hint>Файл может быть в любом привычном виде: программа сама найдёт название и цену.</Hint>
+            <Field label="Имя поставщика">
+              <input className={controlClass} value={supplier} onChange={(event) => setSupplier(event.target.value)} />
+            </Field>
+            <Hint>
+              Колонки, строка заголовков и лист определяются автоматически. Вопрос появится только если прайс требует проверки.
+            </Hint>
             <Button onClick={() => void readPrice()} disabled={busy !== null}>
               {busy === "price" ? "Читаем файл…" : "Прочитать файл"}
             </Button>

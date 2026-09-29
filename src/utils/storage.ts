@@ -31,6 +31,9 @@ function normalizeTuple(value: unknown): PriceTuple | null {
     String(value[4] ?? ""),
     String(value[5] ?? ""),
     String(value[6] ?? ""),
+    String(value[7] ?? ""),
+    String(value[8] ?? ""),
+    String(value[9] ?? ""),
   ];
 }
 
@@ -52,18 +55,36 @@ function normalizeCatalogItem(value: unknown): CatalogItem | null {
   return { code, name, unit: String(value.unit ?? "").trim() };
 }
 
+function mapperIndex(value: unknown, fallback = -1): number {
+  const index = Number(value);
+  return Number.isInteger(index) ? index : fallback;
+}
+
 function normalizeMapper(value: unknown): ColumnMapper | null {
   if (!isPlain(value)) return null;
-  const mapper = {
+  const labels = isPlain(value.labels) ? value.labels : {};
+  const mapper: ColumnMapper = {
     headerRow: Number(value.headerRow),
-    name: Number(value.name),
-    price: Number(value.price),
-    barcode: Number(value.barcode),
-    code: Number(value.code),
-    unit: Number(value.unit),
+    name: mapperIndex(value.name),
+    price: mapperIndex(value.price),
+    barcode: mapperIndex(value.barcode),
+    code: mapperIndex(value.code),
+    unit: mapperIndex(value.unit),
+    stock: mapperIndex(value.stock),
+    pack: mapperIndex(value.pack),
+    multiplicity: mapperIndex(value.multiplicity),
+    labels: {
+      name: String(labels.name ?? ""),
+      price: String(labels.price ?? ""),
+      barcode: String(labels.barcode ?? ""),
+      stock: String(labels.stock ?? ""),
+      unit: String(labels.unit ?? ""),
+      pack: String(labels.pack ?? ""),
+      multiplicity: String(labels.multiplicity ?? ""),
+    },
+    headerSignature: Array.isArray(value.headerSignature) ? value.headerSignature.map((item) => String(item ?? "")) : [],
   };
-  if (!Number.isInteger(mapper.headerRow) || mapper.headerRow < 1) return null;
-  if (![mapper.name, mapper.price, mapper.barcode, mapper.code, mapper.unit].every(Number.isInteger)) return null;
+  if (!Number.isInteger(mapper.headerRow) || mapper.headerRow < 0) return null;
   return mapper;
 }
 

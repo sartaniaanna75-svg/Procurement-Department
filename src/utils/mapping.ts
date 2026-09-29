@@ -1,4 +1,4 @@
-import type { CatalogItem, ColumnMapper, PriceTuple } from "../types";
+import type { CatalogItem, ColumnLabels, ColumnMapper, PriceTuple } from "../types";
 import { parsePrice } from "./parseFile";
 import { matchKey } from "./rows";
 import { normalizeText } from "./text";
@@ -23,6 +23,10 @@ function classifyHeader(header: string): HeaderField | null {
   return null;
 }
 
+export function emptyLabels(): ColumnLabels {
+  return { name: "", price: "", barcode: "", stock: "", unit: "", pack: "", multiplicity: "" };
+}
+
 function detectFields(headers: string[]): { mapper: Omit<ColumnMapper, "headerRow">; supplierCol: number; score: number } {
   const found: Partial<Record<HeaderField, number>> = {};
   headers.forEach((header, index) => {
@@ -34,8 +38,13 @@ function detectFields(headers: string[]): { mapper: Omit<ColumnMapper, "headerRo
     name: found.name ?? -1,
     price: found.price ?? -1,
     barcode: found.barcode ?? -1,
-    code: found.code ?? -1,
+    code: -1,
     unit: found.unit ?? -1,
+    stock: -1,
+    pack: -1,
+    multiplicity: -1,
+    labels: emptyLabels(),
+    headerSignature: [] as string[],
   };
   let score = 0;
   if (mapper.name >= 0) score += 2;
@@ -82,8 +91,8 @@ export function mapperFits(mapper: ColumnMapper, matrix: string[][]): boolean {
   const header = matrix[mapper.headerRow - 1];
   if (!header) return false;
   if (mapper.name < 0 || mapper.price < 0) return false;
-  const indexes = [mapper.name, mapper.price, mapper.barcode, mapper.code, mapper.unit];
-  return indexes.every((index) => index < header.length);
+  const indexes = [mapper.name, mapper.price, mapper.barcode, mapper.unit, mapper.stock, mapper.pack, mapper.multiplicity];
+  return indexes.every((index) => index < 0 || index < header.length);
 }
 
 function cell(row: string[], index: number): string {
@@ -109,10 +118,12 @@ export function extractPriceRows(
     const supplier = cell(row, supplierCol) || fallbackSupplier.trim();
     if (!supplier) continue;
     const barcode = cell(row, mapper.barcode);
-    const code = cell(row, mapper.code);
     const unit = cell(row, mapper.unit);
-    const tuple: PriceTuple = [supplier, name, price, barcode, code, unit, fileName];
-    unique.set(matchKey(supplier, name, code, barcode, unit), tuple);
+    const stock = cell(row, mapper.stock);
+    const pack = cell(row, mapper.pack);
+    const multiplicity = cell(row, mapper.multiplicity);
+    const tuple: PriceTuple = [supplier, name, price, barcode, "", unit, fileName, stock, pack, multiplicity];
+    unique.set(matchKey(supplier, name, "", barcode, unit), tuple);
   }
   if (unique.size === 0) {
     throw new Error("Не найдено ни одной позиции с названием и ценой. Проверьте строку заголовков и колонки.");
@@ -121,7 +132,9 @@ export function extractPriceRows(
 }
 
 export function columnChoicesOverlap(mapper: ColumnMapper): boolean {
-  const indexes = [mapper.name, mapper.price, mapper.barcode, mapper.code, mapper.unit].filter((index) => index >= 0);
+  const indexes = [mapper.name, mapper.price, mapper.barcode, mapper.unit, mapper.stock, mapper.pack, mapper.multiplicity].filter(
+    (index) => index >= 0,
+  );
   return new Set(indexes).size !== indexes.length;
 }
 

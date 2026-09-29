@@ -16,12 +16,16 @@ interface MappingFormProps {
   onCancel: () => void;
 }
 
-const fields: Array<{ key: keyof Omit<ColumnMapper, "headerRow">; label: string; required?: boolean }> = [
-  { key: "name", label: "Название товара", required: true },
+type MapperColumn = "name" | "price" | "barcode" | "stock" | "unit" | "pack" | "multiplicity";
+
+const fields: Array<{ key: MapperColumn; label: string; required?: boolean }> = [
+  { key: "name", label: "Наименование", required: true },
   { key: "price", label: "Цена", required: true },
   { key: "barcode", label: "Штрихкод" },
-  { key: "code", label: "Код товара" },
+  { key: "stock", label: "Остаток" },
   { key: "unit", label: "Единица измерения" },
+  { key: "pack", label: "Упаковка" },
+  { key: "multiplicity", label: "Кратность" },
 ];
 
 function columnLabel(header: string, index: number): string {
@@ -40,8 +44,9 @@ export function MappingForm({
   onSubmit,
   onCancel,
 }: MappingFormProps) {
-  const headers = matrix[headerRow - 1] ?? [];
-  const preview = matrix.slice(headerRow, headerRow + 8);
+  const headers = headerRow > 0 ? matrix[headerRow - 1] ?? [] : matrix[0] ?? [];
+  const preview = matrix.slice(headerRow > 0 ? headerRow : 0, (headerRow > 0 ? headerRow : 0) + 8);
+  const needsReview = Boolean(note?.includes("Требует проверки"));
   const overlap = columnChoicesOverlap(mapper);
   const sample = priceSample(matrix, headerRow, mapper.price);
   const ready = mapper.name >= 0 && mapper.price >= 0 && !overlap;
@@ -49,11 +54,11 @@ export function MappingForm({
   return (
     <div className="mt-4 space-y-4 border-t border-slate-200 pt-4">
       <div>
-        <h3 className="font-semibold text-brand">Как читать этот прайс</h3>
+        <h3 className="font-semibold text-brand">{needsReview ? "Требует проверки" : "Как читать этот прайс"}</h3>
         <Hint>
-          Файл «{fileName}», поставщик «{supplier}». Сопоставление колонок сохранится для этого поставщика.
+          Файл «{fileName}», поставщик «{supplier}». После исправления эта структура запомнится и в следующий раз будет проверена заново.
         </Hint>
-        {note ? <p className="mt-2 text-sm text-warn">{note}</p> : null}
+        {note ? <p className={`mt-2 text-sm ${needsReview ? "text-danger" : "text-warn"}`}>{note}</p> : null}
       </div>
       <Field label="Строка с заголовками">
         <input

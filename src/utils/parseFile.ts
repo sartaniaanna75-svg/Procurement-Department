@@ -64,39 +64,59 @@ function parseHtml(text: string): string[][] {
   );
 }
 
-function parseWorkbook(buffer: ArrayBuffer): string[][] {
-  const workbook = XLSX.read(buffer, { type: "array" });
-  const sheetName = workbook.SheetNames[0];
-  if (!sheetName) throw new Error("В книге нет листов");
-  const sheet = workbook.Sheets[sheetName];
+export interface WorkbookSheet {
+  name: string;
+  matrix: string[][];
+}
+
+function cleanMatrix(rows: string[][]): string[][] {
+  return rows.filter((row) => row.some((cell) => cell.trim() !== ""));
+}
+
+function matrixFromSheet(sheet: XLSX.WorkSheet): string[][] {
   const rows = XLSX.utils.sheet_to_json<(string | number | boolean | null)[]>(sheet, {
     header: 1,
     raw: false,
     defval: "",
   });
-  return rows.map((row) => (row ?? []).map((cell) => String(cell ?? "").trim()));
+  return cleanMatrix(rows.map((row) => (row ?? []).map((cell) => String(cell ?? "").trim())));
 }
 
-export async function readMatrix(file: File): Promise<string[][]> {
+function parseWorkbook(buffer: ArrayBuffer): WorkbookSheet[] {
+  const workbook = XLSX.read(buffer, { type: "array" });
+  if (workbook.SheetNames.length === 0) throw new Error("В книге нет листов");
+  return workbook.SheetNames.map((name) => ({
+    name,
+    matrix: matrixFromSheet(workbook.Sheets[name]),
+  })).filter((sheet) => sheet.matrix.length > 0);
+}
+
+export async function readSheets(file: File): Promise<WorkbookSheet[]> {
   if (file.size > MAX_FILE_BYTES) {
     throw new Error("Файл больше 15 МБ. Разбейте прайс на части.");
   }
   const name = file.name.toLowerCase();
   const buffer = await file.arrayBuffer();
-  let matrix: string[][];
+  let sheets: WorkbookSheet[];
   if (name.endsWith(".csv") || name.endsWith(".txt")) {
-    matrix = parseCsv(decodeText(buffer));
+    sheets = [{ name: file.name, matrix: cleanMatrix(parseCsv(decodeText(buffer))) }];
   } else if (name.endsWith(".html") || name.endsWith(".htm")) {
-    matrix = parseHtml(decodeText(buffer));
+    sheets = [{ name: file.name, matrix: cleanMatrix(parseHtml(decodeText(buffer))) }];
   } else {
     const head = new TextDecoder("utf-8").decode(buffer.slice(0, 300)).trim().toLowerCase();
     if (head.startsWith("<!doctype html") || head.startsWith("<html") || head.startsWith("<table")) {
-      matrix = parseHtml(decodeText(buffer));
+      sheets = [{ name: file.name, matrix: cleanMatrix(parseHtml(decodeText(buffer))) }];
     } else {
-      matrix = parseWorkbook(buffer);
+      sheets = parseWorkbook(buffer);
     }
   }
-  const cleaned = matrix.filter((row) => row.some((cell) => cell.trim() !== ""));
-  if (cleaned.length === 0) throw new Error("Файл пустой или его формат не распознан");
-  return cleaned;
+  if (sheets.length === 0 || sheets.every((sheet) => sheet.matrix.length === 0)) {
+    throw new Error("Файл пустой или его формат не распознан");
+  }
+  return sheets;
+}
+
+export async function readMatrix(file: File): Promise<string[][]> {
+  const sheets = await readSheets(file);
+  return sheets[0].matrix;
 }

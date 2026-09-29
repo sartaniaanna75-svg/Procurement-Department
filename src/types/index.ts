@@ -4,8 +4,18 @@ export type PriceFilter = "all" | "need" | "confirmed" | "missing";
 
 export type MatchFilter = "need" | "confirmed" | "missing" | "resolved";
 
-/** supplier, name, price, barcode, code, unit, filename */
-export type PriceTuple = [string, string, number, string, string, string, string];
+/** supplier, name, price, barcode, code, unit, filename, stock, pack, multiplicity */
+export type PriceTuple = [string, string, number, string, string, string, string, string, string, string];
+
+export interface ColumnLabels {
+  name: string;
+  price: string;
+  barcode: string;
+  stock: string;
+  unit: string;
+  pack: string;
+  multiplicity: string;
+}
 
 export interface Upload {
   file: string;
@@ -27,6 +37,11 @@ export interface ColumnMapper {
   barcode: number;
   code: number;
   unit: number;
+  stock: number;
+  pack: number;
+  multiplicity: number;
+  labels: ColumnLabels;
+  headerSignature: string[];
 }
 
 export interface MatchDecision {
@@ -63,6 +78,9 @@ export interface DisplayRow {
   code: string;
   unit: string;
   file: string;
+  stock: string;
+  pack: string;
+  multiplicity: string;
 }
 
 export const EMPTY_MATCH: MatchDecision = {
