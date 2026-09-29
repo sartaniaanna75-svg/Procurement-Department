@@ -24,7 +24,7 @@ function classifyHeader(header: string): HeaderField | null {
 }
 
 export function emptyLabels(): ColumnLabels {
-  return { name: "", price: "", barcode: "", stock: "", unit: "", pack: "", multiplicity: "" };
+  return { name: "", price: "", barcode: "", stock: "", unit: "", pack: "", multiplicity: "", supplierCode: "" };
 }
 
 function detectFields(headers: string[]): { mapper: Omit<ColumnMapper, "headerRow">; supplierCol: number; score: number } {
@@ -43,6 +43,7 @@ function detectFields(headers: string[]): { mapper: Omit<ColumnMapper, "headerRo
     stock: -1,
     pack: -1,
     multiplicity: -1,
+    volume: -1,
     labels: emptyLabels(),
     headerSignature: [] as string[],
   };
@@ -109,12 +110,17 @@ export function extractPriceRows(
 ): PriceTuple[] {
   const start = mapper.headerRow;
   const unique = new Map<string, PriceTuple>();
+  let misses = 0;
   for (let index = start; index < matrix.length; index += 1) {
     const row = matrix[index] ?? [];
     const name = cell(row, mapper.name);
-    if (!name || /^(итог|итого|всего|total|sum)[:\s]*$/i.test(name)) continue;
     const price = parsePrice(cell(row, mapper.price));
-    if (price === null) continue;
+    if (!name || price === null || /^(итог|итого|всего|total|sum)[:\s]*$/i.test(name)) {
+      if (unique.size > 0) misses += 1;
+      if (misses >= 5) break;
+      continue;
+    }
+    misses = 0;
     const supplier = cell(row, supplierCol) || fallbackSupplier.trim();
     if (!supplier) continue;
     const barcode = cell(row, mapper.barcode);
@@ -122,7 +128,22 @@ export function extractPriceRows(
     const stock = cell(row, mapper.stock);
     const pack = cell(row, mapper.pack);
     const multiplicity = cell(row, mapper.multiplicity);
-    const tuple: PriceTuple = [supplier, name, price, barcode, "", unit, fileName, stock, pack, multiplicity];
+    const supplierCode = cell(row, mapper.code);
+    const volume = cell(row, mapper.volume);
+    const tuple: PriceTuple = [
+      supplier,
+      name,
+      price,
+      barcode,
+      "",
+      unit,
+      fileName,
+      stock,
+      pack,
+      multiplicity,
+      supplierCode,
+      volume,
+    ];
     unique.set(matchKey(supplier, name, "", barcode, unit), tuple);
   }
   if (unique.size === 0) {
@@ -132,9 +153,17 @@ export function extractPriceRows(
 }
 
 export function columnChoicesOverlap(mapper: ColumnMapper): boolean {
-  const indexes = [mapper.name, mapper.price, mapper.barcode, mapper.unit, mapper.stock, mapper.pack, mapper.multiplicity].filter(
-    (index) => index >= 0,
-  );
+  const indexes = [
+    mapper.name,
+    mapper.price,
+    mapper.barcode,
+    mapper.code,
+    mapper.unit,
+    mapper.stock,
+    mapper.pack,
+    mapper.multiplicity,
+    mapper.volume,
+  ].filter((index) => index >= 0);
   return new Set(indexes).size !== indexes.length;
 }
 

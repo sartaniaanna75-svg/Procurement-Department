@@ -7,7 +7,20 @@ export function matchKey(supplier: string, name: string, code: string, barcode: 
 }
 
 export function toRow(tuple: PriceTuple): DisplayRow {
-  const [supplier, name, price, barcode, code, unit, file, stock = "", pack = "", multiplicity = ""] = tuple;
+  const [
+    supplier,
+    name,
+    price,
+    barcode,
+    code,
+    unit,
+    file,
+    stock = "",
+    pack = "",
+    multiplicity = "",
+    supplierCode = "",
+    volume = "",
+  ] = tuple;
   return {
     key: matchKey(supplier, name, code, barcode, unit),
     supplier,
@@ -20,6 +33,8 @@ export function toRow(tuple: PriceTuple): DisplayRow {
     stock,
     pack,
     multiplicity,
+    supplierCode,
+    volume,
   };
 }
 

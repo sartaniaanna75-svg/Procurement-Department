@@ -34,6 +34,8 @@ function normalizeTuple(value: unknown): PriceTuple | null {
     String(value[7] ?? ""),
     String(value[8] ?? ""),
     String(value[9] ?? ""),
+    String(value[10] ?? ""),
+    String(value[11] ?? ""),
   ];
 }
 
@@ -73,6 +75,7 @@ function normalizeMapper(value: unknown): ColumnMapper | null {
     stock: mapperIndex(value.stock),
     pack: mapperIndex(value.pack),
     multiplicity: mapperIndex(value.multiplicity),
+    volume: mapperIndex(value.volume),
     labels: {
       name: String(labels.name ?? ""),
       price: String(labels.price ?? ""),
@@ -81,6 +84,7 @@ function normalizeMapper(value: unknown): ColumnMapper | null {
       unit: String(labels.unit ?? ""),
       pack: String(labels.pack ?? ""),
       multiplicity: String(labels.multiplicity ?? ""),
+      supplierCode: String(labels.supplierCode ?? ""),
     },
     headerSignature: Array.isArray(value.headerSignature) ? value.headerSignature.map((item) => String(item ?? "")) : [],
   };

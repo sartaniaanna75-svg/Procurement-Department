@@ -1,23 +1,16 @@
 import { useRef, useState } from "react";
-import type { ColumnMapper } from "../types";
 import { useAppState } from "../hooks/useAppState";
 import { plural } from "../utils/format";
-import { columnChoicesOverlap, extractPriceRows, parseCatalog } from "../utils/mapping";
-import { TABLE_ACCEPT, readMatrix, readSheets } from "../utils/parseFile";
-import { detectionAt, finalizeMapper, ingestPriceSource } from "../utils/priceIntake";
+import { parseCatalog } from "../utils/mapping";
+import { PRICE_ACCEPT, TABLE_ACCEPT, readMatrix } from "../utils/parseFile";
+import { normalizePriceFile } from "../utils/priceIntake";
 import { supplierKey } from "../utils/text";
 import { Button, Field, controlClass } from "./Button";
 import { Card, Hint } from "./Card";
-import { MappingForm } from "./MappingForm";
 
-interface PendingPrice {
-  fileName: string;
-  supplier: string;
-  matrix: string[][];
-  headerRow: number;
-  mapper: ColumnMapper;
-  supplierCol: number;
-  note: string | null;
+interface PriceReport {
+  tone: "ok" | "warn";
+  lines: string[];
 }
 
 export function TodayTab() {
@@ -25,7 +18,7 @@ export function TodayTab() {
   const [formOpen, setFormOpen] = useState(true);
   const [supplier, setSupplier] = useState("");
   const [file, setFile] = useState<File | null>(null);
-  const [pending, setPending] = useState<PendingPrice | null>(null);
+  const [report, setReport] = useState<PriceReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [busy, setBusy] = useState<"price" | "catalog" | null>(null);
@@ -34,6 +27,7 @@ export function TodayTab() {
   async function readPrice() {
     setError(null);
     setInfo(null);
+    setReport(null);
     const name = supplier.trim();
     if (!file) {
       setError("Выберите файл прайса.");
@@ -45,71 +39,45 @@ export function TodayTab() {
     }
     setBusy("price");
     try {
-      const sheets = await readSheets(file);
-      const result = ingestPriceSource(sheets, name, file.name, state.mappers[supplierKey(name)] ?? null);
-      if (result.status === "ready") {
-        commitPrice(
-          { file: file.name, supplier: name, uploadedAt: new Date().toISOString(), rows: result.rows },
-          result.mapper,
+      const documents = await normalizePriceFile(file, name, state.mappers[supplierKey(name)] ?? null);
+      const lines: string[] = [];
+      let saved = 0;
+      let savedMapper = state.mappers[supplierKey(name)] ?? null;
+      for (const result of documents) {
+        if (result.status === "ready") {
+          commitPrice(
+            { file: result.fileName, supplier: name, uploadedAt: new Date().toISOString(), rows: result.rows },
+            result.mapper,
+          );
+          saved += result.rows.length;
+          savedMapper = result.mapper;
+          lines.push(
+            `«${result.fileName}»: ${result.rows.length} ${plural(result.rows.length, "позиция", "позиции", "позиций")}. Распознано: ${result.recognized.join(", ")}.`,
+          );
+          if (result.ignored.length > 0) lines.push(`Не взяты в рабочие поля: ${result.ignored.join(", ")}.`);
+          if (result.warnings.length > 0) lines.push(result.warnings.join(" "));
+          continue;
+        }
+        lines.push(`«${result.fileName}»: ${result.reason}`);
+        if (result.recognized.length > 0) lines.push(`Распознано: ${result.recognized.join(", ")}.`);
+        if (result.missing.length > 0) lines.push(`Не распознано: ${result.missing.join(", ")}.`);
+        if (result.ignored.length > 0) lines.push(`Сомнительные колонки не подставлены: ${result.ignored.join(", ")}.`);
+      }
+      const ready = documents.some((result) => result.status === "ready");
+      setReport({ tone: ready && documents.every((result) => result.status === "ready") ? "ok" : "warn", lines });
+      if (saved > 0) {
+        setInfo(
+          savedMapper
+            ? `Сохранено ${saved} ${plural(saved, "позиция", "позиции", "позиций")}. Структура поставщика запомнена и будет проверяться при следующем файле.`
+            : `Сохранено ${saved} ${plural(saved, "позиция", "позиции", "позиций")}.`,
         );
-        setPending(null);
         setFile(null);
         if (priceInputRef.current) priceInputRef.current.value = "";
-        setInfo(
-          `Файл «${file.name}» разобран автоматически: ${result.rows.length} ${plural(result.rows.length, "позиция", "позиции", "позиций")}.`,
-        );
-        return;
       }
-      setPending({
-        fileName: file.name,
-        supplier: name,
-        matrix: result.matrix,
-        headerRow: Math.max(result.mapper.headerRow, 1),
-        mapper: result.mapper,
-        supplierCol: -1,
-        note: result.reason,
-      });
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Не удалось прочитать файл");
     } finally {
       setBusy(null);
-    }
-  }
-
-  function changePendingHeader(value: number) {
-    if (!pending || !Number.isInteger(value) || value < 1 || value > pending.matrix.length) return;
-    setPending({
-      ...pending,
-      headerRow: value,
-      mapper: detectionAt(pending.matrix, value),
-      note: pending.note,
-    });
-  }
-
-  function commitPending() {
-    if (!pending) return;
-    setError(null);
-    if (pending.mapper.name < 0 || pending.mapper.price < 0) {
-      setError("Укажите колонки названия и цены.");
-      return;
-    }
-    if (columnChoicesOverlap(pending.mapper)) {
-      setError("Каждая колонка выбирается один раз.");
-      return;
-    }
-    try {
-      const mapper = finalizeMapper(pending.matrix, { ...pending.mapper, headerRow: pending.headerRow });
-      const rows = extractPriceRows(pending.matrix, mapper, pending.supplier, pending.fileName, -1);
-      commitPrice(
-        { file: pending.fileName, supplier: pending.supplier, uploadedAt: new Date().toISOString(), rows },
-        mapper,
-      );
-      setInfo(`Файл «${pending.fileName}»: ${rows.length} ${plural(rows.length, "позиция", "позиции", "позиций")}. Структура сохранена и будет проверяться при следующей загрузке.`);
-      setPending(null);
-      setFile(null);
-      if (priceInputRef.current) priceInputRef.current.value = "";
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Не удалось загрузить прайс");
     }
   }
 
@@ -153,10 +121,10 @@ export function TodayTab() {
                 ref={priceInputRef}
                 className="hidden"
                 type="file"
-                accept={TABLE_ACCEPT}
+                accept={PRICE_ACCEPT}
                 onChange={(event) => {
                   setFile(event.target.files?.[0] ?? null);
-                  setPending(null);
+                  setReport(null);
                 }}
               />
             </div>
@@ -164,24 +132,17 @@ export function TodayTab() {
               <input className={controlClass} value={supplier} onChange={(event) => setSupplier(event.target.value)} />
             </Field>
             <Hint>
-              Колонки, строка заголовков и лист определяются автоматически. Вопрос появится только если прайс требует проверки.
+              Файл разбирается сам: программа находит таблицу и смысл колонок. Тот же разбор сможет вызвать агент, который заберёт вложение из почты.
             </Hint>
             <Button onClick={() => void readPrice()} disabled={busy !== null}>
               {busy === "price" ? "Читаем файл…" : "Прочитать файл"}
             </Button>
-            {pending ? (
-              <MappingForm
-                fileName={pending.fileName}
-                supplier={pending.supplier}
-                matrix={pending.matrix}
-                headerRow={pending.headerRow}
-                mapper={pending.mapper}
-                note={pending.note}
-                onHeaderRow={changePendingHeader}
-                onMapper={(mapper) => setPending({ ...pending, mapper })}
-                onSubmit={commitPending}
-                onCancel={() => setPending(null)}
-              />
+            {report ? (
+              <div className={`space-y-1 text-sm ${report.tone === "ok" ? "text-ok" : "text-ink"}`}>
+                {report.lines.map((line, index) => (
+                  <p key={`${index}-${line}`}>{line}</p>
+                ))}
+              </div>
             ) : null}
           </div>
         ) : null}
