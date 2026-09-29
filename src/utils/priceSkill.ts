@@ -5,6 +5,7 @@
 export {
   acceptPriceColumn,
   ingestPriceSource,
+  normalizeLoadedPrice,
   normalizePriceFile,
   type NormalizedPriceDocument,
   type PriceIntakeResult,

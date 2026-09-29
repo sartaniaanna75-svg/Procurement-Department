@@ -1,9 +1,13 @@
-import type { AppState, CatalogItem, ColumnMapper, MatchDecision, MatchStatus, PriceTuple, Upload } from "../types";
+import type { AppState, CatalogItem, ColumnMapper, DraftOrder, IsoWeekday, MatchDecision, MatchStatus, NotInPriceItem, OneCLink, PricePoint, PriceTuple, PriceWatch, ReminderStage, SupplierCard, SupplierSchedule, Upload } from "../types";
 import { STORAGE_KEY } from "../types";
+import { createSupplier, emptyOneC, emptySchedule } from "./suppliers";
+import { supplierKey } from "./text";
+import { matchKey } from "./rows";
 
 export function emptyState(): AppState {
   return {
     uploads: [],
+    heldPrices: [],
     catalog: [],
     mappers: {},
     matches: {},
@@ -12,6 +16,11 @@ export function emptyState(): AppState {
     cleared: {},
     seen: {},
     seenReady: false,
+    suppliers: [],
+    notInPrice: {},
+    priceHistory: {},
+    draftOrders: [],
+    priceWatch: [],
   };
 }
 
@@ -41,10 +50,14 @@ function normalizeTuple(value: unknown): PriceTuple | null {
 
 function normalizeUpload(value: unknown): Upload | null {
   if (!isPlain(value) || !Array.isArray(value.rows)) return null;
+  const supplier = String(value.supplier ?? "");
   return {
     file: String(value.file ?? ""),
-    supplier: String(value.supplier ?? ""),
+    supplier,
+    supplierId: String(value.supplierId ?? ""),
     uploadedAt: String(value.uploadedAt ?? ""),
+    cycleDate: String(value.cycleDate ?? ""),
+    versionId: String(value.versionId ?? ""),
     rows: value.rows.map(normalizeTuple).filter((row): row is PriceTuple => row !== null),
   };
 }
@@ -114,12 +127,199 @@ function mapValues<T>(value: unknown, convert: (item: unknown) => T | null): Rec
   return result;
 }
 
+function weekday(value: unknown): IsoWeekday | null {
+  const day = Number(value);
+  if (!Number.isInteger(day) || day < 1 || day > 7) return null;
+  return day as IsoWeekday;
+}
+
+function textList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => String(item ?? "").trim()).filter(Boolean);
+}
+
+function normalizeOneC(value: unknown): OneCLink {
+  const link = emptyOneC();
+  if (!isPlain(value)) return link;
+  for (const key of Object.keys(link) as Array<keyof OneCLink>) link[key] = String(value[key] ?? "");
+  return link;
+}
+
+function normalizeSchedule(value: unknown): SupplierSchedule {
+  const schedule = emptySchedule();
+  if (!isPlain(value)) return schedule;
+  schedule.expectFrom = weekday(value.expectFrom);
+  schedule.expectTo = weekday(value.expectTo);
+  schedule.deadlineWeekday = weekday(value.deadlineWeekday);
+  schedule.deadlineTime = String(value.deadlineTime ?? "");
+  if (value.validityDays === null || value.validityDays === undefined || value.validityDays === "") {
+    schedule.validityDays = null;
+  } else {
+    const validity = Number(value.validityDays);
+    schedule.validityDays = Number.isFinite(validity) && validity >= 0 ? validity : null;
+  }
+  schedule.reminders = Array.isArray(value.reminders)
+    ? value.reminders
+        .map((item) => {
+          if (!isPlain(item)) return null;
+          const hours = Number(item.hoursBeforeDeadline);
+          if (!Number.isFinite(hours) || hours < 0) return null;
+          const stage: ReminderStage = { id: String(item.id ?? `rem-${hours}`), hoursBeforeDeadline: hours };
+          return stage;
+        })
+        .filter((item): item is ReminderStage => item !== null)
+    : [];
+  return schedule;
+}
+
+function normalizeSupplier(value: unknown): SupplierCard | null {
+  if (!isPlain(value)) return null;
+  const name = String(value.name ?? "").trim();
+  if (!name) return null;
+  const base = createSupplier(name, String(value.id ?? "") || `sup-${supplierKey(name)}`);
+  return {
+    ...base,
+    active: value.active !== false,
+    responsible: String(value.responsible ?? ""),
+    orderDays: textDays(value.orderDays),
+    aliases: textList(value.aliases),
+    emails: textList(value.emails),
+    inns: textList(value.inns),
+    fileHints: textList(value.fileHints),
+    sheetHints: textList(value.sheetHints),
+    structureHint: String(value.structureHint ?? ""),
+    oneC: normalizeOneC(value.oneC),
+    schedule: normalizeSchedule(value.schedule),
+  };
+}
+
+function textDays(value: unknown): IsoWeekday[] {
+  if (!Array.isArray(value)) return [];
+  return value.map(weekday).filter((day): day is IsoWeekday => day !== null);
+}
+
+function normalizeNotInPrice(value: unknown): NotInPriceItem | null {
+  if (!isPlain(value)) return null;
+  const name = String(value.name ?? "").trim();
+  if (!name) return null;
+  const price = Number(value.lastPrice);
+  return {
+    supplierId: String(value.supplierId ?? ""),
+    name,
+    barcode: String(value.barcode ?? ""),
+    code: String(value.code ?? ""),
+    unit: String(value.unit ?? ""),
+    lastPrice: Number.isFinite(price) ? price : 0,
+    lastSeenAt: String(value.lastSeenAt ?? ""),
+  };
+}
+
+function normalizeHistory(value: unknown): PricePoint[] | null {
+  if (!Array.isArray(value)) return null;
+  const points = value
+    .map((item) => {
+      if (!isPlain(item)) return null;
+      const price = Number(item.price);
+      if (!Number.isFinite(price)) return null;
+      return { at: String(item.at ?? ""), price, versionId: String(item.versionId ?? "") };
+    })
+    .filter((item): item is PricePoint => item !== null);
+  return points;
+}
+
+function normalizeDraft(value: unknown): DraftOrder | null {
+  if (!isPlain(value) || value.status !== "draft") return null;
+  const supplierId = String(value.supplierId ?? "");
+  if (!supplierId) return null;
+  return {
+    id: String(value.id ?? ""),
+    supplierId,
+    cycleDate: String(value.cycleDate ?? ""),
+    priceVersionId: String(value.priceVersionId ?? ""),
+    status: "draft",
+    createdAt: String(value.createdAt ?? ""),
+  };
+}
+
+function normalizeWatch(value: unknown): PriceWatch | null {
+  if (!isPlain(value)) return null;
+  const supplierId = String(value.supplierId ?? "");
+  if (!supplierId) return null;
+  return {
+    supplierId,
+    cycleDate: String(value.cycleDate ?? ""),
+    draftId: String(value.draftId ?? ""),
+    previousVersionId: String(value.previousVersionId ?? ""),
+    nextVersionId: String(value.nextVersionId ?? ""),
+    receivedAt: String(value.receivedAt ?? ""),
+  };
+}
+
+function attachSuppliers(uploads: Upload[], suppliers: SupplierCard[]): { uploads: Upload[]; suppliers: SupplierCard[]; notInPrice: Record<string, NotInPriceItem[]> } {
+  const cards = [...suppliers];
+  for (const upload of uploads) {
+    if (!upload.supplier.trim()) continue;
+    if (cards.some((card) => card.id === upload.supplierId || supplierKey(card.name) === supplierKey(upload.supplier))) continue;
+    cards.push(createSupplier(upload.supplier, `sup-${supplierKey(upload.supplier)}`));
+  }
+  const groups = new Map<string, Upload[]>();
+  for (const upload of uploads) {
+    const card = cards.find((item) => item.id === upload.supplierId || supplierKey(item.name) === supplierKey(upload.supplier));
+    if (!card) continue;
+    const list = groups.get(card.id) ?? [];
+    list.push({ ...upload, supplier: card.name, supplierId: card.id, versionId: upload.versionId || `ver-${upload.uploadedAt || card.id}` });
+    groups.set(card.id, list);
+  }
+  const current: Upload[] = [];
+  const notInPrice: Record<string, NotInPriceItem[]> = {};
+  for (const [supplierId, list] of groups) {
+    const sorted = [...list].sort((a, b) => a.uploadedAt.localeCompare(b.uploadedAt));
+    const latest = sorted[sorted.length - 1];
+    current.push(latest);
+    const present = new Set(latest.rows.map((tuple) => matchKey(String(tuple[0]), String(tuple[1]), String(tuple[4]), String(tuple[3]), String(tuple[5]))));
+    const missing: NotInPriceItem[] = [];
+    const seen = new Set<string>();
+    for (const older of sorted.slice(0, -1)) {
+      for (const tuple of older.rows) {
+        const key = matchKey(String(tuple[0]), String(tuple[1]), String(tuple[4]), String(tuple[3]), String(tuple[5]));
+        if (present.has(key) || seen.has(key)) continue;
+        seen.add(key);
+        const price = Number(tuple[2]);
+        missing.push({
+          supplierId,
+          name: String(tuple[1] ?? ""),
+          barcode: String(tuple[3] ?? ""),
+          code: String(tuple[4] ?? ""),
+          unit: String(tuple[5] ?? ""),
+          lastPrice: Number.isFinite(price) ? price : 0,
+          lastSeenAt: older.uploadedAt,
+        });
+      }
+    }
+    if (missing.length > 0) notInPrice[supplierId] = missing;
+  }
+  return { uploads: current, suppliers: cards, notInPrice };
+}
+
 export function normalizeState(value: unknown): AppState {
   const base = emptyState();
   if (!isPlain(value)) return base;
+  const suppliers = Array.isArray(value.suppliers)
+    ? value.suppliers.map(normalizeSupplier).filter((item): item is SupplierCard => item !== null)
+    : [];
+  const uploads = Array.isArray(value.uploads)
+    ? value.uploads.map(normalizeUpload).filter((upload): upload is Upload => upload !== null)
+    : [];
+  const attached = attachSuppliers(uploads, suppliers);
+  const storedMissing = mapValues(value.notInPrice, (item) => {
+    if (!Array.isArray(item)) return null;
+    const rows = item.map(normalizeNotInPrice).filter((row): row is NotInPriceItem => row !== null);
+    return rows.length > 0 ? rows : null;
+  });
   return {
-    uploads: Array.isArray(value.uploads)
-      ? value.uploads.map(normalizeUpload).filter((upload): upload is Upload => upload !== null)
+    uploads: attached.uploads,
+    heldPrices: Array.isArray(value.heldPrices)
+      ? value.heldPrices.map(normalizeUpload).filter((upload): upload is Upload => upload !== null)
       : [],
     catalog: Array.isArray(value.catalog)
       ? value.catalog.map(normalizeCatalogItem).filter((item): item is CatalogItem => item !== null)
@@ -140,6 +340,15 @@ export function normalizeState(value: unknown): AppState {
       return Number.isFinite(count) ? count : null;
     }),
     seenReady: Boolean(value.seenReady),
+    suppliers: attached.suppliers,
+    notInPrice: Object.keys(storedMissing).length > 0 ? storedMissing : attached.notInPrice,
+    priceHistory: mapValues(value.priceHistory, normalizeHistory),
+    draftOrders: Array.isArray(value.draftOrders)
+      ? value.draftOrders.map(normalizeDraft).filter((item): item is DraftOrder => item !== null)
+      : [],
+    priceWatch: Array.isArray(value.priceWatch)
+      ? value.priceWatch.map(normalizeWatch).filter((item): item is PriceWatch => item !== null)
+      : [],
   };
 }
 

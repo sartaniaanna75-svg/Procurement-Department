@@ -209,7 +209,7 @@ export function applyAutoMatch(state: AppState): AppState {
   const rows = listRows(state.uploads);
   const index = buildCatalogIndex(state.catalog);
   const codes = new Set(state.catalog.map((item) => item.code));
-  const matches: Record<string, MatchDecision> = {};
+  const matches: Record<string, MatchDecision> = { ...state.matches };
   for (const row of rows) {
     const previous = state.matches[row.key];
     if (previous && isManual(previous) && (previous.status === "missing" || codes.has(previous.code))) {

@@ -4,6 +4,7 @@ import { useAppState } from "../hooks/useAppState";
 
 const tabs = [
   { to: "/", label: "Сегодня", end: true },
+  { to: "/suppliers", label: "Поставщики", end: false },
   { to: "/prices", label: "Прайсы", end: false },
   { to: "/matching", label: "Номенклатура", end: false },
   { to: "/order", label: "Заказ", end: false },

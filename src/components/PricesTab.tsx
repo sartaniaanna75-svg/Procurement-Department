@@ -4,7 +4,7 @@ import { useShowMore } from "../hooks/useShowMore";
 import type { PriceFilter } from "../types";
 import { EMPTY_MATCH } from "../types";
 import { formatDate, formatPrice, passesFilter, plural, statusLabel, statusRowClass } from "../utils/format";
-import { catalogMap, listRows, ourNomenclature, summarizeSuppliers } from "../utils/rows";
+import { catalogMap, listRows, matchKey, ourNomenclature, summarizeSuppliers } from "../utils/rows";
 import { matchesQuery } from "../utils/search";
 import { unitsConflict } from "../utils/units";
 import { Button, Field, FilterBar, controlClass } from "./Button";
@@ -161,6 +161,36 @@ export function PricesTab() {
           Показано {Math.min(pager.count, filtered.length)} из {filtered.length}
         </Hint>
       ) : null}
+      <MissingFromPrice supplier={supplier} />
     </div>
+  );
+}
+
+function MissingFromPrice({ supplier }: { supplier: string }) {
+  const { state } = useAppState();
+  const card = state.suppliers.find((item) => item.name === supplier);
+  const items = card ? state.notInPrice[card.id] ?? [] : [];
+  if (items.length === 0) return null;
+  const catalog = catalogMap(state.catalog);
+  return (
+    <Card title="Нет в текущем прайсе">
+      <Hint>Эти товары были в прошлом прайсе. Остаток не обнуляется, сопоставление сохранено.</Hint>
+      <div className="mt-3 divide-y divide-slate-100">
+        {items.slice(0, 30).map((item) => {
+          const key = matchKey(supplier, item.name, item.code, item.barcode, item.unit);
+          const match = state.matches[key] ?? EMPTY_MATCH;
+          return (
+            <div key={key} className="py-2 text-sm">
+              <div>{item.name}</div>
+              <div className="text-xs text-mute">
+                Нет в текущем прайсе
+                {match.code ? ` · ${ourNomenclature(match.code, catalog)}` : ""}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {items.length > 30 ? <Hint>Показаны первые 30 из {items.length}.</Hint> : null}
+    </Card>
   );
 }

@@ -1,9 +1,11 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import type { AppState, CatalogItem, ColumnMapper, Upload } from "../types";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import type { AppState, CatalogItem, ColumnMapper, SupplierCard, Upload } from "../types";
 import { absentKey, todayISO } from "../utils/format";
 import { applyAutoMatch, buildCatalogIndex, suggestMatch } from "../utils/matching";
-import { listRows, matchKey } from "../utils/rows";
+import { acceptCurrentPrice, upsertSupplier, type AcceptedPrice } from "../utils/procurement";
+import { listRows } from "../utils/rows";
 import { loadState, saveState } from "../utils/storage";
+import { createSupplier } from "../utils/suppliers";
 import { supplierKey } from "../utils/text";
 
 interface Notice {
@@ -17,6 +19,10 @@ interface AppApi {
   notice: Notice | null;
   clearNotice: () => void;
   commitPrice: (upload: Upload, mapper: ColumnMapper) => void;
+  saveSupplier: (card: SupplierCard) => void;
+  acceptSupplierPrice: (input: AcceptedPrice) => { ok: boolean; reason: string };
+  acceptSupplierPrices: (inputs: AcceptedPrice[], card?: SupplierCard) => { ok: boolean; reason: string };
+  correctSupplierPrice: (inputs: AcceptedPrice[], card?: SupplierCard) => { ok: boolean; reason: string };
   commitCatalog: (items: CatalogItem[]) => void;
   confirmMatch: (key: string) => void;
   offerAlternative: (key: string) => void;
@@ -38,6 +44,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   });
   const [saveError, setSaveError] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
+  const undoPrice = useRef<AppState | null>(null);
 
   useEffect(() => {
     setSaveError(saveState(state));
@@ -45,24 +52,75 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
 
   const commitPrice = useCallback((upload: Upload, mapper: ColumnMapper) => {
     setState((prev) => {
-      const uploads = [
-        ...prev.uploads.filter((item) => !(item.file === upload.file && item.supplier === upload.supplier)),
-        upload,
-      ];
-      const seen = { ...prev.seen };
-      for (const tuple of upload.rows) {
-        const [supplier, name, , barcode, code, unit] = tuple;
-        const key = matchKey(supplier, name, code, barcode, unit);
-        seen[key] = (seen[key] ?? 0) + 1;
+      let suppliers = prev.suppliers;
+      let card = suppliers.find((item) => item.id === upload.supplierId || supplierKey(item.name) === supplierKey(upload.supplier));
+      if (!card) {
+        card = createSupplier(upload.supplier);
+        suppliers = [...suppliers, card];
       }
-      return applyAutoMatch({
-        ...prev,
-        uploads,
-        seen,
-        mappers: { ...prev.mappers, [supplierKey(upload.supplier)]: mapper },
-      });
+      const result = acceptCurrentPrice(
+        { ...prev, suppliers },
+        { supplierId: card.id, fileName: upload.file, receivedAt: upload.uploadedAt, rows: upload.rows, mapper },
+      );
+      return result.ok ? result.state : prev;
     });
   }, []);
+
+  const saveSupplier = useCallback((card: SupplierCard) => {
+    setState((prev) => upsertSupplier(prev, card));
+  }, []);
+
+  const applyPrice = useCallback((base: AppState, input: AcceptedPrice) => {
+    const result = acceptCurrentPrice(base, input);
+    return result;
+  }, []);
+
+  const acceptSupplierPrices = useCallback((inputs: AcceptedPrice[], card?: SupplierCard) => {
+    let outcome = { ok: false, reason: "Прайс не сохранён." };
+    setState((prev) => {
+      let next = card ? upsertSupplier(prev, card) : prev;
+      const notes: string[] = [];
+      const before = next;
+      for (const input of inputs) {
+        const result = applyPrice(next, input);
+        if (!result.ok) {
+          notes.push(result.reason);
+          continue;
+        }
+        next = result.state;
+        notes.push(result.reason);
+      }
+      const accepted = next !== before;
+      outcome = { ok: accepted, reason: notes.filter(Boolean).join(" ") || (accepted ? "" : "Прайс не сохранён.") };
+      if (!accepted) return card ? before : prev;
+      undoPrice.current = prev;
+      return next;
+    });
+    return outcome;
+  }, [applyPrice]);
+
+  const acceptSupplierPrice = useCallback((input: AcceptedPrice) => acceptSupplierPrices([input]), [acceptSupplierPrices]);
+
+  const correctSupplierPrice = useCallback((inputs: AcceptedPrice[], card?: SupplierCard) => {
+    const base = undoPrice.current;
+    if (!base) return { ok: false, reason: "Изменить поставщика уже нельзя." };
+    let next = card ? upsertSupplier(base, card) : base;
+    const notes: string[] = [];
+    let ok = false;
+    for (const input of inputs) {
+      const result = applyPrice(next, input);
+      if (!result.ok) {
+        notes.push(result.reason);
+        continue;
+      }
+      next = result.state;
+      notes.push(result.reason);
+      ok = true;
+    }
+    if (!ok) return { ok: false, reason: notes.join(" ") || "Прайс не сохранён." };
+    setState(next);
+    return { ok: true, reason: notes.join(" ") };
+  }, [applyPrice]);
 
   const commitCatalog = useCallback((items: CatalogItem[]) => {
     setState((prev) => applyAutoMatch({ ...prev, catalog: items }));
@@ -163,6 +221,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       notice,
       clearNotice,
       commitPrice,
+      saveSupplier,
+      acceptSupplierPrice,
+      acceptSupplierPrices,
+      correctSupplierPrice,
       commitCatalog,
       confirmMatch,
       offerAlternative,
@@ -177,6 +239,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       notice,
       clearNotice,
       commitPrice,
+      saveSupplier,
+      acceptSupplierPrice,
+      acceptSupplierPrices,
+      correctSupplierPrice,
       commitCatalog,
       confirmMatch,
       offerAlternative,

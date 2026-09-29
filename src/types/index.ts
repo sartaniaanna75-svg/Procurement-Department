@@ -34,8 +34,95 @@ export interface ColumnLabels {
 export interface Upload {
   file: string;
   supplier: string;
+  supplierId: string;
   uploadedAt: string;
+  cycleDate: string;
+  versionId: string;
   rows: PriceTuple[];
+}
+
+/** 1 — понедельник … 7 — воскресенье */
+export type IsoWeekday = 1 | 2 | 3 | 4 | 5 | 6 | 7;
+
+export interface OneCLink {
+  name: string;
+  guid: string;
+  partner: string;
+  partnerGuid: string;
+  counterparty: string;
+  counterpartyGuid: string;
+  agreement: string;
+  agreementGuid: string;
+  contract: string;
+  contractGuid: string;
+  organization: string;
+  organizationGuid: string;
+}
+
+export interface ReminderStage {
+  id: string;
+  hoursBeforeDeadline: number;
+}
+
+export interface SupplierSchedule {
+  expectFrom: IsoWeekday | null;
+  expectTo: IsoWeekday | null;
+  deadlineWeekday: IsoWeekday | null;
+  deadlineTime: string;
+  validityDays: number | null;
+  reminders: ReminderStage[];
+}
+
+export interface SupplierCard {
+  id: string;
+  name: string;
+  active: boolean;
+  responsible: string;
+  orderDays: IsoWeekday[];
+  aliases: string[];
+  emails: string[];
+  inns: string[];
+  fileHints: string[];
+  sheetHints: string[];
+  structureHint: string;
+  oneC: OneCLink;
+  schedule: SupplierSchedule;
+}
+
+export interface NotInPriceItem {
+  supplierId: string;
+  name: string;
+  barcode: string;
+  code: string;
+  unit: string;
+  lastPrice: number;
+  lastSeenAt: string;
+}
+
+export interface PricePoint {
+  at: string;
+  price: number;
+  versionId: string;
+}
+
+/** Черновик будущего заказа. В 1С сам не уходит. */
+export interface DraftOrder {
+  id: string;
+  supplierId: string;
+  cycleDate: string;
+  priceVersionId: string;
+  status: "draft";
+  createdAt: string;
+}
+
+/** Новый прайс пришёл после черновика. Пересчёт делает менеджер, не программа. */
+export interface PriceWatch {
+  supplierId: string;
+  cycleDate: string;
+  draftId: string;
+  previousVersionId: string;
+  nextVersionId: string;
+  receivedAt: string;
 }
 
 export interface CatalogItem {
@@ -74,6 +161,7 @@ export interface ConfirmedChoice {
 
 export interface AppState {
   uploads: Upload[];
+  heldPrices: Upload[];
   catalog: CatalogItem[];
   mappers: Record<string, ColumnMapper>;
   matches: Record<string, MatchDecision>;
@@ -82,6 +170,11 @@ export interface AppState {
   cleared: Record<string, boolean>;
   seen: Record<string, number>;
   seenReady: boolean;
+  suppliers: SupplierCard[];
+  notInPrice: Record<string, NotInPriceItem[]>;
+  priceHistory: Record<string, PricePoint[]>;
+  draftOrders: DraftOrder[];
+  priceWatch: PriceWatch[];
 }
 
 export interface DisplayRow {

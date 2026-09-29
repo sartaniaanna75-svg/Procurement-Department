@@ -804,12 +804,11 @@ export function acceptPriceColumn(
   return { ...result, status: "ready", question: null, confidence: "high", reason: "", rows, mapper };
 }
 
-export async function normalizePriceFile(
-  file: File,
+export function normalizeLoadedPrice(
+  loaded: Array<{ fileName: string; sheets: WorkbookSheet[]; unreadable: string | null }>,
   supplier: string,
   saved: ColumnMapper | null,
-): Promise<NormalizedPriceDocument[]> {
-  const loaded = await loadPriceFiles(file);
+): NormalizedPriceDocument[] {
   return loaded.map((item) => {
     if (item.unreadable || item.sheets.length === 0) {
       const empty = emptyResult(item.unreadable ?? "Товарная таблица не найдена. Данные не придуманы.");
@@ -817,6 +816,15 @@ export async function normalizePriceFile(
     }
     return { ...ingestPriceSource(item.sheets, supplier, item.fileName, saved), fileName: item.fileName };
   });
+}
+
+export async function normalizePriceFile(
+  file: File,
+  supplier: string,
+  saved: ColumnMapper | null,
+): Promise<NormalizedPriceDocument[]> {
+  const loaded = await loadPriceFiles(file);
+  return normalizeLoadedPrice(loaded, supplier, saved);
 }
 
 export function detectionAt(matrix: string[][], headerRow: number): ColumnMapper {

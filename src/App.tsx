@@ -3,6 +3,7 @@ import { Layout } from "./components/Layout";
 import { MatchingTab } from "./components/MatchingTab";
 import { OrderTab } from "./components/OrderTab";
 import { PricesTab } from "./components/PricesTab";
+import { SuppliersTab } from "./components/SuppliersTab";
 import { TodayTab } from "./components/TodayTab";
 import { AppStateProvider } from "./hooks/useAppState";
 
@@ -15,6 +16,7 @@ export function App() {
         <Layout>
           <Routes>
             <Route path="/" element={<TodayTab />} />
+            <Route path="/suppliers" element={<SuppliersTab />} />
             <Route path="/prices" element={<PricesTab />} />
             <Route path="/matching" element={<MatchingTab />} />
             <Route path="/order" element={<OrderTab />} />
