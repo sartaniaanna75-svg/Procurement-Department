@@ -3,8 +3,9 @@ import type { AppState, CatalogItem, ColumnMapper, SupplierCard, Upload } from "
 import { absentKey, todayISO } from "../utils/format";
 import { applyAutoMatch, buildCatalogIndex, suggestMatch } from "../utils/matching";
 import { acceptCurrentPrice, upsertSupplier, type AcceptedPrice } from "../utils/procurement";
+import { loadPersistedState, savePersistedState } from "../utils/persist";
 import { listRows } from "../utils/rows";
-import { loadState, saveState } from "../utils/storage";
+import { emptyState } from "../utils/storage";
 import { createSupplier } from "../utils/suppliers";
 import { supplierKey } from "../utils/text";
 
@@ -35,20 +36,43 @@ interface AppApi {
 const AppStateContext = createContext<AppApi | null>(null);
 
 export function AppStateProvider({ children }: { children: ReactNode }) {
-  const [state, setState] = useState<AppState>(() => {
-    const loaded = loadState();
-    if (loaded.uploads.length > 0 && loaded.catalog.length > 0 && Object.keys(loaded.matches).length === 0) {
-      return applyAutoMatch(loaded);
-    }
-    return loaded;
-  });
+  const [state, setState] = useState<AppState>(emptyState);
+  const [hydrated, setHydrated] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const undoPrice = useRef<AppState | null>(null);
 
   useEffect(() => {
-    setSaveError(saveState(state));
-  }, [state]);
+    let active = true;
+    loadPersistedState()
+      .then((loaded) => {
+        if (!active) return;
+        const next =
+          loaded.uploads.length > 0 && loaded.catalog.length > 0 && Object.keys(loaded.matches).length === 0
+            ? applyAutoMatch(loaded)
+            : loaded;
+        setState(next);
+        setHydrated(true);
+      })
+      .catch(() => {
+        if (!active) return;
+        setSaveError("Не удалось прочитать сохранённые данные.");
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    let active = true;
+    savePersistedState(state).then((error) => {
+      if (active) setSaveError(error);
+    });
+    return () => {
+      active = false;
+    };
+  }, [state, hydrated]);
 
   const commitPrice = useCallback((upload: Upload, mapper: ColumnMapper) => {
     setState((prev) => {
@@ -252,6 +276,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       markAbsent,
     ],
   );
+
+  if (!hydrated) {
+    return <div className="mx-auto max-w-[1280px] px-4 py-6 text-sm text-mute">{saveError ?? "Загрузка данных…"}</div>;
+  }
 
   return <AppStateContext.Provider value={api}>{children}</AppStateContext.Provider>;
 }
