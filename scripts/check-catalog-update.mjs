@@ -112,7 +112,7 @@ const supplierRow = {
   volume: "",
 };
 const hit = matching.suggestMatch(supplierRow, index);
-check("точный уникальный штрихкод 100%", hit.confidence === 100 && hit.reason === "Точный штрихкод", `${hit.confidence} ${hit.reason}`);
+check("точный уникальный штрихкод 100%", hit.confidence === 100 && /точн.*штрихкод/i.test(hit.reason), `${hit.confidence} ${hit.reason}`);
 
 const dupIndex = matching.buildCatalogIndex([
   { code: "A", name: "Товар 1", unit: "шт", barcode: "8690511183853" },

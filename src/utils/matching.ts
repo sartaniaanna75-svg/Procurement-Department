@@ -4,7 +4,7 @@ import { listRows } from "./rows";
 import { normCode } from "./text";
 import { unitsConflict } from "./units";
 
-export const MATCH_LOGIC = 9;
+export const MATCH_LOGIC = 10;
 
 /** Веса признаков. Процент считается только по тем, которые удалось сравнить. */
 export const MATCH_WEIGHTS = {
@@ -118,13 +118,6 @@ function lookupBarcodeCandidates(index: CatalogIndex, barcode: string, exclude?:
   });
 }
 
-function lookupBarcode(index: CatalogIndex, barcode: string, unit: string, exclude?: string): CatalogItem | null {
-  const merged = lookupBarcodeCandidates(index, barcode, exclude);
-  const unique = new Set(merged.map((item) => item.code));
-  if (unique.size !== 1) return null;
-  return preferUnit(merged, unit);
-}
-
 function nameRatio(leftName: string, rightName: string, frequency?: Map<string, number>): number {
   const left = contentStems(leftName);
   const right = new Set(contentStems(rightName));
@@ -214,13 +207,13 @@ function scoreProposal(row: DisplayRow, item: CatalogItem, frequency?: Map<strin
   if (possible === 0 || earned <= 0) return { confidence: 0, reason: "" };
   const confidence = Math.max(1, Math.min(100, Math.round((earned / possible) * 100)));
   let reason = "Частичное совпадение признаков";
-  if (conflict) reason = conflict;
-  else if (barcodeMatch && nameHit) reason = "Точный штрихкод + название";
-  else if (barcodeMatch) reason = "Точный штрихкод";
-  else if (nameHit && brandHit && sizeHit) reason = "Похожее название + бренд + фасовка";
-  else if (nameHit && sizeHit) reason = "Похожее название + одинаковый объём";
-  else if (nameHit && brandHit) reason = "Похожее название + бренд + фасовка";
-  else if (nameHit) reason = "Похожее название";
+  if (conflict) reason = "Точное совпадение штрихкода. Название отличается.";
+  else if (barcodeMatch && nameHit) reason = "Точное совпадение штрихкода";
+  else if (barcodeMatch) reason = "Точное совпадение штрихкода";
+  else if (nameHit && brandHit && sizeHit) reason = "Совпадает бренд, объём и большая часть названия";
+  else if (nameHit && sizeHit) reason = "Штрихкод отсутствует. Высокое сходство названия и объёма";
+  else if (nameHit && brandHit) reason = "Совпадает бренд и большая часть названия";
+  else if (nameHit) reason = ratio >= 0.7 ? "Высокое сходство названия" : "Слабое сходство названия";
   return { confidence, reason };
 }
 
@@ -258,13 +251,17 @@ export function suggestMatch(row: DisplayRow, index: CatalogIndex, excludeCode?:
       status: "review",
       code: "",
       confidence: 0,
-      reason: "Один штрихкод у нескольких позиций нашей номенклатуры",
+      reason: "Штрихкод найден у нескольких товаров нашей номенклатуры — требуется проверка",
       relation: "exact",
     };
   }
   const byBarcode = uniqueCodes.size === 1 ? preferUnit(barcodeHits, row.unit) : null;
   if (byBarcode) {
-    const reason = unitsConflict(row.unit, byBarcode.unit) ? "Точный штрихкод, единица не совпала" : "Точный штрихкод";
+    const nameDiffers = Boolean(catalogConflict(row, byBarcode.name));
+    const unitDiffers = unitsConflict(row.unit, byBarcode.unit);
+    let reason = "Точное совпадение штрихкода";
+    if (nameDiffers) reason = "Точное совпадение штрихкода. Название отличается.";
+    else if (unitDiffers) reason = "Точное совпадение штрихкода. Единица не совпала.";
     return { status: "review", code: byBarcode.code, confidence: 100, reason, relation: "exact" };
   }
 
@@ -384,22 +381,30 @@ export function applyAutoMatch(state: AppState, options?: { reconsiderAbsent?: b
 }
 
 function barcodeReview(row: DisplayRow, index: CatalogIndex, recalled: Recall): MatchDecision | null {
-  const hit = lookupBarcode(index, row.barcode, row.unit);
+  const hits = lookupBarcodeCandidates(index, row.barcode);
+  const uniqueCodes = new Set(hits.map((item) => item.code));
+  if (barcodeDigits(row.barcode) && uniqueCodes.size > 1) {
+    return {
+      status: "review",
+      code: "",
+      confidence: 0,
+      reason: "Штрихкод найден у нескольких товаров нашей номенклатуры — требуется проверка",
+      relation: "exact",
+    };
+  }
+  const hit = uniqueCodes.size === 1 ? preferUnit(hits, row.unit) : null;
   if (!hit) return null;
   const conflict = catalogConflict(row, hit.name);
   const linked = recalled.kind === "matched" || recalled.kind === "alternative" ? recalled.code : "";
   const elsewhere = Boolean(linked && linked !== hit.code);
   if (!conflict && !elsewhere) return null;
-  const prior =
-    recalled.kind === "matched" && recalled.code
-      ? ` Раньше сопоставлено с ${recalled.code}. Сейчас: «${row.name}».`
-      : recalled.kind !== "none"
-        ? ` Раньше: ${recalled.reason || "было другое решение"}. Сейчас: «${row.name}».`
-        : "";
-  const reason = conflict
-    ? `${conflict}. В каталоге: «${hit.name}».${prior}`
-    : `Штрихкод совпадает, но название и характеристики товара существенно отличаются. В каталоге: «${hit.name}».${prior}`;
-  return { status: "review", code: hit.code, confidence: scoreProposal(row, hit).confidence, reason, relation: "exact" };
+  let reason = conflict
+    ? "Точное совпадение штрихкода. Название отличается."
+    : "Точное совпадение штрихкода";
+  if (elsewhere) {
+    reason = `${reason} Раньше было другое сопоставление — проверьте позицию.`;
+  }
+  return { status: "review", code: hit.code, confidence: 100, reason, relation: "exact" };
 }
 
 function decisionFromRecall(recalled: Recall): MatchDecision {

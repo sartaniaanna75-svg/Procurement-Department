@@ -78,7 +78,7 @@ check("штрихкод даёт предложение и не подтверж
 check("процент по штрихкоду высокий и настоящий", Boolean(proposedMatch) && proposedMatch.confidence >= 85 && proposedMatch.confidence <= 100, String(proposedMatch?.confidence));
 check("процент показан числом", proposedMatch && format.confidenceLabel(proposedMatch.confidence) === `${proposedMatch.confidence}%` && format.confidenceLabel(0) === "—");
 check("причина про штрихкод", Boolean(proposedMatch) && /штрихкод/i.test(proposedMatch.reason), proposedMatch?.reason ?? "");
-check("конфликт штрихкода на проверке", conflictSafe && state.matches[conflictSafe.key].status === "review" && /существенно изменилось наименование/.test(state.matches[conflictSafe.key].reason), conflictSafe ? state.matches[conflictSafe.key].reason : "нет");
+check("конфликт штрихкода на проверке", conflictSafe && state.matches[conflictSafe.key].status === "review" && state.matches[conflictSafe.key].confidence === 100 && /название отличается/i.test(state.matches[conflictSafe.key].reason), conflictSafe ? `${state.matches[conflictSafe.key].confidence} ${state.matches[conflictSafe.key].reason}` : "нет");
 check("конфликт не подтверждён", !safeMatches.some((row) => state.matches[row.key]?.code === "4602222222222" && state.matches[row.key]?.status === "confirmed"));
 
 const named = byName(state, "Средство ABC 500 мл");
@@ -128,8 +128,8 @@ check(
   reusedCode ? state.matches[reusedCode.key]?.reason : "",
 );
 
-check("пропуск не окончательное решение", format.confidenceLabel(64) === "64%" && format.passesFilter("skipped", "skipped") && !format.passesFilter("skipped", "resolved") && !format.passesFilter("skipped", "need"));
-check("всё решено включает отказ и каталог", format.passesFilter("rejected", "resolved") && format.passesFilter("missing", "resolved") && !format.passesFilter("need", "resolved") && !format.passesFilter("review", "resolved"));
+check("пропуск не окончательное решение", format.confidenceLabel(64) === "64%" && format.passesFilter("skipped", "skipped") && !format.passesFilter("skipped", "resolved") && format.passesFilter("skipped", "need"));
+check("всё решено включает отказ и подтверждение", format.passesFilter("rejected", "resolved") && format.passesFilter("confirmed", "resolved") && !format.passesFilter("missing", "resolved") && !format.passesFilter("need", "resolved") && !format.passesFilter("review", "resolved"));
 
 const holdName = "Временный товар без решения";
 state = {

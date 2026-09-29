@@ -4,7 +4,7 @@ import { useAppState } from "../hooks/useAppState";
 import { useShowMore } from "../hooks/useShowMore";
 import type { MatchFilter, MatchStatus } from "../types";
 import { EMPTY_MATCH } from "../types";
-import { confidenceLabel, passesFilter, plural, statusLabel, statusRowClass } from "../utils/format";
+import { confidenceClass, confidenceLabel, passesFilter, plural, statusLabel, statusRowClass } from "../utils/format";
 import { catalogMap, listRows, ourNomenclature, summarizeSuppliers } from "../utils/rows";
 import { matchesQuery } from "../utils/search";
 import { unitsConflict } from "../utils/units";
@@ -20,11 +20,11 @@ interface PickerState {
 }
 
 interface PendingBulk {
-  kind: "reject" | "missing";
+  kind: "reject";
   keys: string[];
 }
 
-const OPEN_STATUS = new Set<MatchStatus>(["need", "review", "skipped"]);
+const OPEN_STATUS = new Set<MatchStatus>(["need", "review", "skipped", "missing"]);
 
 export function MatchingTab() {
   const {
@@ -33,15 +33,11 @@ export function MatchingTab() {
     notice,
     clearNotice,
     confirmMatch,
+    confirmMatchesMany,
     pickMatch,
-    markMissing,
-    markMissingMany,
     rejectMatch,
     rejectMatches,
-    skipMatchesMany,
-    restoreSkipped,
     releaseMatch,
-    dismissReviewMatch,
   } = useAppState();
   const [supplier, setSupplier] = useState("");
   const [query, setQuery] = useState("");
@@ -68,16 +64,24 @@ export function MatchingTab() {
   );
   const rejectedVisible = rejectedMemory.filter((item) => matchesQuery([item.traits.name, item.supplier, item.traits.barcode, item.traits.kind], query));
   const counts = useMemo(() => {
-    const tally = { need: 0, review: 0, confirmed: 0, rejected: 0, missing: 0, skipped: 0 };
+    const tally = { need: 0, review: 0, confirmed: 0, rejected: 0, open: 0, resolved: 0 };
     for (const row of scoped) {
       const match = state.matches[row.key] ?? EMPTY_MATCH;
       if (match.relation === "alternative") continue;
-      if (match.status === "need") tally.need += 1;
-      else if (match.status === "review") tally.review += 1;
-      else if (match.status === "confirmed" || match.status === "picked") tally.confirmed += 1;
-      else if (match.status === "rejected") tally.rejected += 1;
-      else if (match.status === "missing") tally.missing += 1;
-      else if (match.status === "skipped") tally.skipped += 1;
+      if (match.status === "confirmed" || match.status === "picked") {
+        tally.confirmed += 1;
+        tally.resolved += 1;
+      } else if (match.status === "rejected") {
+        tally.rejected += 1;
+        tally.resolved += 1;
+      } else if (match.status === "review") {
+        tally.review += 1;
+        tally.open += 1;
+      } else {
+        // need / skipped / missing — всё ещё требует решения в новом интерфейсе
+        tally.need += 1;
+        tally.open += 1;
+      }
     }
     return tally;
   }, [scoped, state.matches]);
@@ -87,8 +91,6 @@ export function MatchingTab() {
       { id: "review" as const, label: `На проверке — ${counts.review}` },
       { id: "confirmed" as const, label: `Подтверждено — ${counts.confirmed}` },
       { id: "rejected" as const, label: `Не работаем — ${counts.rejected}` },
-      { id: "missing" as const, label: `Нет в нашей номенклатуре — ${counts.missing}` },
-      { id: "skipped" as const, label: `Пропущено пока — ${counts.skipped}` },
       { id: "resolved" as const, label: "Всё решено" },
     ],
     [counts],
@@ -105,11 +107,16 @@ export function MatchingTab() {
   const filteredKeys = useMemo(() => filtered.map((row) => row.key), [filtered]);
   const chosenKeys = filteredKeys.filter((key) => selected.has(key));
   const openKeys = chosenKeys.filter((key) => OPEN_STATUS.has((state.matches[key] ?? EMPTY_MATCH).status));
+  const confirmableKeys = chosenKeys.filter((key) => {
+    const match = state.matches[key] ?? EMPTY_MATCH;
+    return Boolean(match.code) && OPEN_STATUS.has(match.status);
+  });
   const allChecked = filteredKeys.length > 0 && filteredKeys.every((key) => selected.has(key));
   const someChecked = chosenKeys.length > 0 && !allChecked;
   const pager = useShowMore(`${supplier}|${filter}|${query}`);
   const visible = filtered.slice(0, pager.count);
-  const remaining = counts.need + counts.review;
+  const remaining = counts.open;
+  const priceDone = scoped.length > 0 && remaining === 0;
 
   useEffect(() => {
     setSelected(new Set());
@@ -186,8 +193,7 @@ export function MatchingTab() {
 
   function applyPending() {
     if (!pending) return;
-    if (pending.kind === "reject") rejectMatches(pending.keys);
-    else markMissingMany(pending.keys);
+    rejectMatches(pending.keys);
     setSelected(new Set());
     setPending(null);
   }
@@ -233,15 +239,16 @@ export function MatchingTab() {
         <FilterBar value={filter} options={filters} onChange={setFilter} />
       </div>
       <p className="text-sm text-ink">
-        {scoped.length} {plural(scoped.length, "позиция", "позиции", "позиций")}
+        <span className="block font-medium">
+          Всего позиций: {scoped.length}
+        </span>
+        <span className="mt-1 block font-medium">Решено: {counts.resolved}</span>
         <span className="mt-1 block font-medium">Осталось решить: {remaining}</span>
         <span className="mt-1 block font-medium">Выбрано: {filter === "rejected" ? 0 : chosenKeys.length}</span>
         <span className="mt-1 block text-mute">
-          {remaining === 0 && counts.skipped === 0
-            ? "Обязательных решений не осталось."
-            : counts.skipped > 0
-              ? `Отложено: ${counts.skipped}. Эти позиции не потеряны и не считаются окончательно решёнными.`
-              : "Прайс ещё не обработан: в очереди остаются позиции, по которым нужно решение."}
+          {priceDone
+            ? "Прайс полностью обработан."
+            : "Прайс ещё не обработан: подтвердите совпадения кнопкой «Да» или отметьте «Не работаем»."}
         </span>
       </p>
       {analyzing ? <Hint>Анализируем номенклатуру...</Hint> : null}
@@ -265,14 +272,18 @@ export function MatchingTab() {
       {filter !== "rejected" && chosenKeys.length > 0 ? (
         <div className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-card">
           <span className="text-sm font-medium text-ink">Выбрано: {chosenKeys.length}</span>
+          <Button
+            variant="yes"
+            disabled={confirmableKeys.length === 0}
+            onClick={() => {
+              confirmMatchesMany(confirmableKeys);
+              setSelected(new Set());
+            }}
+          >
+            Да
+          </Button>
           <Button variant="ghost" disabled={openKeys.length === 0} onClick={() => setPending({ kind: "reject", keys: openKeys })}>
             Не работаем
-          </Button>
-          <Button variant="ghost" disabled={openKeys.length === 0} onClick={() => setPending({ kind: "missing", keys: openKeys })}>
-            Нет в нашей номенклатуре
-          </Button>
-          <Button variant="ghost" disabled={openKeys.length === 0} onClick={() => { skipMatchesMany(openKeys); setSelected(new Set()); }}>
-            Пропустить пока
           </Button>
         </div>
       ) : null}
@@ -286,7 +297,7 @@ export function MatchingTab() {
             <table className="w-full min-w-[720px] table-fixed border-collapse text-sm">
               <thead>
                 <tr>
-                  {["Товар поставщика", "Поставщик", "Штрихкод", "Действие"].map((title) => (
+                  {["Номенклатура поставщика", "Поставщик", "Штрихкод", "Действие"].map((title) => (
                     <th
                       key={title}
                       className="sticky top-0 z-10 bg-white px-3 py-2 text-left align-top text-xs font-semibold text-brand shadow-[inset_0_-1px_0_#E5E7EB]"
@@ -317,7 +328,7 @@ export function MatchingTab() {
         )
       ) : visible.length === 0 ? (
         <Card title="Сопоставление">
-          <Hint>Нет товаров в этом фильтре.</Hint>
+          <Hint>{filter === "resolved" && priceDone ? "Прайс полностью обработан." : "Нет товаров в этом фильтре."}</Hint>
         </Card>
       ) : (
         <div className="max-h-[70vh] overflow-auto rounded-[10px] border border-slate-200 bg-white shadow-card">
@@ -348,7 +359,7 @@ export function MatchingTab() {
                     <span>Выбрать все отображаемые</span>
                   </label>
                 </th>
-                {["Товар поставщика", "Поставщик", "Наша номенклатура 1С", "Уверенность", "Почему", "Статус", "Действие"].map(
+                {["Номенклатура поставщика", "Поставщик", "Предлагаемая наша номенклатура", "Уверенность", "Почему", "Статус", "Действие"].map(
                   (title) => (
                     <th
                       key={title}
@@ -407,42 +418,26 @@ export function MatchingTab() {
                         ourNomenclature(match.code, catalog)
                       )}
                     </td>
-                    <td className="break-words px-3 py-2 align-top">{confidenceLabel(match.confidence)}</td>
+                    <td className={`break-words px-3 py-2 align-top ${confidenceClass(match.confidence)}`}>
+                      {confidenceLabel(match.confidence)}
+                    </td>
                     <td className="break-words px-3 py-2 align-top">{match.reason || "—"}</td>
                     <td className="break-words px-3 py-2 align-top">{label}</td>
                     <td className="px-3 py-2 align-top">
                       <div className="flex flex-wrap gap-1">
                         <Button variant="yes" disabled={!match.code || locked} onClick={() => confirmMatch(row.key)}>
-                          Подтвердить
+                          Да
                         </Button>
                         <Button
                           variant="ghost"
-                          disabled={state.catalog.length === 0}
+                          disabled={state.catalog.length === 0 || locked}
                           onClick={(event) => openPicker(row.key, event.currentTarget)}
                         >
                           Выбрать другой
                         </Button>
-                        <Button variant="ghost" disabled={match.status === "missing"} onClick={() => markMissing(row.key)}>
-                          Нет в нашей номенклатуре
-                        </Button>
-                        <Button variant="ghost" onClick={() => rejectMatch(row.key)}>
+                        <Button variant="ghost" disabled={match.status === "rejected"} onClick={() => rejectMatch(row.key)}>
                           Не работаем
                         </Button>
-                        {match.status === "need" || match.status === "review" ? (
-                          <Button variant="ghost" onClick={() => skipMatchesMany([row.key])}>
-                            Пропустить пока
-                          </Button>
-                        ) : null}
-                        {match.status === "skipped" ? (
-                          <Button variant="ghost" onClick={() => restoreSkipped(row.key)}>
-                            Вернуть в очередь
-                          </Button>
-                        ) : null}
-                        {match.status === "review" && match.relation !== "alternative" ? (
-                          <Button variant="ghost" onClick={() => dismissReviewMatch(row.key)}>
-                            Это другой товар
-                          </Button>
-                        ) : null}
                       </div>
                     </td>
                   </tr>
@@ -478,15 +473,9 @@ export function MatchingTab() {
       {pending ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 px-4">
           <div className="max-w-lg rounded-[10px] bg-white p-5 shadow-card">
-            {pending.kind === "reject" ? (
-              <p className="whitespace-pre-line text-sm text-ink">
-                {`Отметить ${pending.keys.length} ${plural(pending.keys.length, "позицию", "позиции", "позиций")} как «Не работаем»?\n\nЭти позиции не будут повторно предлагаться для сопоставления при следующих загрузках прайса этого поставщика.\n\nРешение можно будет изменить позже.`}
-              </p>
-            ) : (
-              <p className="whitespace-pre-line text-sm text-ink">
-                {`Отметить ${pending.keys.length} ${plural(pending.keys.length, "позицию", "позиции", "позиций")} как «Нет в нашей номенклатуре»?\n\nЭто не отказ от товара. Позиции можно будет сопоставить позже, когда наша номенклатура обновится.`}
-              </p>
-            )}
+            <p className="whitespace-pre-line text-sm text-ink">
+              {`Отметить ${pending.keys.length} ${plural(pending.keys.length, "позицию", "позиции", "позиций")} как «Не работаем»?\n\nЭти позиции не будут повторно предлагаться для сопоставления при следующих загрузках прайса этого поставщика.\n\nРешение можно будет изменить позже.`}
+            </p>
             <div className="mt-4 flex justify-end gap-2">
               <Button variant="secondary" onClick={() => setPending(null)}>
                 Отмена

@@ -30,6 +30,7 @@ interface AppApi {
   commitCatalog: (preview: CatalogPreview) => void;
   restorePreviousCatalog: () => void;
   confirmMatch: (key: string) => void;
+  confirmMatchesMany: (keys: string[]) => void;
   offerAlternative: (key: string) => void;
   pickMatch: (key: string, code: string) => void;
   markMissing: (key: string) => void;
@@ -224,6 +225,20 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  const confirmMatchesMany = useCallback((keys: string[]) => {
+    setNotice(null);
+    setState((prev) => {
+      let next = prev;
+      for (const key of keys) {
+        const current = next.matches[key];
+        if (!current?.code) continue;
+        if (current.status === "confirmed" || current.status === "picked" || current.status === "rejected") continue;
+        next = saveKnownMatch(next, key, { ...current, status: "confirmed" });
+      }
+      return next;
+    });
+  }, []);
+
   const offerAlternative = useCallback((key: string) => {
     const current = state.matches[key];
     if (!current?.code) {
@@ -235,14 +250,16 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   }, [state]);
 
   const pickMatch = useCallback((key: string, code: string) => {
-    setNotice({ tone: "ok", text: "Позиция выбрана. Нажмите «Подтвердить», чтобы сохранить сопоставление." });
-    setState((prev) => ({
-      ...prev,
-      matches: {
-        ...prev.matches,
-        [key]: { status: "need", code, confidence: 0, reason: "Выбрано вручную", relation: "exact" },
-      },
-    }));
+    setNotice({ tone: "ok", text: "Сопоставление сохранено." });
+    setState((prev) =>
+      saveKnownMatch(prev, key, {
+        status: "confirmed",
+        code,
+        confidence: 100,
+        reason: "Выбрано вручную",
+        relation: "exact",
+      }),
+    );
   }, []);
 
   const markMissing = useCallback((key: string) => {
@@ -326,6 +343,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       commitCatalog,
       restorePreviousCatalog,
       confirmMatch,
+      confirmMatchesMany,
       offerAlternative,
       pickMatch,
       markMissing,
@@ -354,6 +372,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       commitCatalog,
       restorePreviousCatalog,
       confirmMatch,
+      confirmMatchesMany,
       offerAlternative,
       pickMatch,
       markMissing,

@@ -35,18 +35,27 @@ export function plural(count: number, one: string, few: string, many: string): s
 
 export function passesFilter(status: MatchStatus, filter: PriceFilter | MatchFilter, relation: "exact" | "alternative" = "exact"): boolean {
   if (filter === "all") return true;
-  if (filter === "resolved") return status === "confirmed" || status === "picked" || status === "missing" || status === "rejected" || relation === "alternative";
+  if (filter === "resolved") return status === "confirmed" || status === "picked" || status === "rejected";
   if (filter === "confirmed") return status === "confirmed" || status === "picked";
   if (filter === "missing") return status === "missing";
   if (filter === "rejected") return status === "rejected";
   if (filter === "review") return status === "review" && relation !== "alternative";
   if (filter === "skipped") return status === "skipped";
-  return status === "need";
+  // «Нужно решить» включает старые отложенные статусы, чтобы их можно было закрыть.
+  return status === "need" || status === "skipped" || status === "missing";
 }
 
 export function confidenceLabel(confidence: number): string {
   if (!Number.isFinite(confidence) || confidence <= 0) return "—";
   return `${Math.round(confidence)}%`;
+}
+
+/** Спокойная подсветка процента уверенности. */
+export function confidenceClass(confidence: number): string {
+  if (!Number.isFinite(confidence) || confidence <= 0) return "text-mute";
+  if (confidence >= 90) return "font-medium text-ok";
+  if (confidence >= 70) return "font-medium text-warn";
+  return "font-medium text-danger";
 }
 
 export function statusLabel(status: MatchStatus): string {
