@@ -1,4 +1,4 @@
-import type { AppState, CatalogItem, ColumnMapper, DraftOrder, IsoWeekday, MatchDecision, MatchStatus, NotInPriceItem, OneCLink, PricePoint, PriceTuple, PriceWatch, ReminderStage, SupplierCard, SupplierSchedule, Upload } from "../types";
+import type { AppState, CatalogItem, ColumnMapper, DraftOrder, IsoWeekday, MatchDecision, MatchStatus, NotInPriceItem, OneCLink, PricePoint, PriceTuple, PriceWatch, ProductMemory, ProductTraits, ReminderStage, SupplierCard, SupplierSchedule, Upload } from "../types";
 import { STORAGE_KEY } from "../types";
 import { createSupplier, emptyOneC, emptySchedule } from "./suppliers";
 import { supplierKey } from "./text";
@@ -11,6 +11,8 @@ export function emptyState(): AppState {
     catalog: [],
     mappers: {},
     matches: {},
+    productMemory: {},
+    reviewPasses: {},
     confirmed: {},
     absent: {},
     cleared: {},
@@ -105,7 +107,7 @@ function normalizeMapper(value: unknown): ColumnMapper | null {
   return mapper;
 }
 
-const STATUSES = new Set<MatchStatus>(["need", "confirmed", "picked", "missing"]);
+const STATUSES = new Set<MatchStatus>(["need", "confirmed", "picked", "missing", "rejected", "review"]);
 
 function normalizeMatch(value: unknown): MatchDecision | null {
   if (!isPlain(value) || typeof value.status !== "string" || !STATUSES.has(value.status as MatchStatus)) return null;
@@ -114,6 +116,50 @@ function normalizeMatch(value: unknown): MatchDecision | null {
     code: String(value.code ?? ""),
     confidence: Number.isFinite(Number(value.confidence)) ? Number(value.confidence) : 0,
     reason: String(value.reason ?? ""),
+  };
+}
+
+function stringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => String(item ?? "").trim()).filter(Boolean);
+}
+
+function normalizeTraits(value: unknown): ProductTraits | null {
+  if (!isPlain(value) || typeof value.name !== "string" || !value.name.trim()) return null;
+  const ml = Number(value.ml);
+  const g = Number(value.g);
+  return {
+    barcode: String(value.barcode ?? ""),
+    name: value.name.trim(),
+    brands: stringList(value.brands),
+    kind: String(value.kind ?? ""),
+    purpose: String(value.purpose ?? ""),
+    variants: stringList(value.variants),
+    ml: Number.isFinite(ml) ? ml : 0,
+    g: Number.isFinite(g) ? g : 0,
+    pack: String(value.pack ?? ""),
+    unit: String(value.unit ?? ""),
+  };
+}
+
+function normalizeMemory(value: unknown): ProductMemory | null {
+  if (!isPlain(value) || (value.verdict !== "rejected" && value.verdict !== "matched")) return null;
+  const traits = normalizeTraits(value.traits);
+  if (!traits) return null;
+  const id = String(value.id ?? "").trim();
+  const supplier = String(value.supplier ?? "").trim();
+  if (!id || !supplier) return null;
+  const matchStatus = value.matchStatus === "picked" || value.matchStatus === "confirmed" ? value.matchStatus : "";
+  return {
+    id,
+    supplierId: String(value.supplierId ?? ""),
+    supplier,
+    verdict: value.verdict,
+    catalogCode: String(value.catalogCode ?? ""),
+    matchStatus,
+    reason: String(value.reason ?? ""),
+    traits,
+    updatedAt: String(value.updatedAt ?? ""),
   };
 }
 
@@ -326,6 +372,8 @@ export function normalizeState(value: unknown): AppState {
       : [],
     mappers: mapValues(value.mappers, normalizeMapper),
     matches: mapValues(value.matches, normalizeMatch),
+    productMemory: mapValues(value.productMemory, normalizeMemory),
+    reviewPasses: mapValues(value.reviewPasses, (item) => (item === true ? true : null)),
     confirmed: mapValues(value.confirmed, (item) => {
       if (!isPlain(item)) return null;
       const supplier = String(item.supplier ?? "");

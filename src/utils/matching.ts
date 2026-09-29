@@ -1,4 +1,5 @@
 import type { AppState, CatalogItem, DisplayRow, MatchDecision } from "../types";
+import { passKey, recallProduct, saveKnownMatch } from "./productMemory";
 import { listRows } from "./rows";
 import { normCode } from "./text";
 import { unitsConflict } from "./units";
@@ -201,22 +202,53 @@ export function suggestMatch(row: DisplayRow, index: CatalogIndex, excludeCode?:
   );
 }
 
-function isManual(match: MatchDecision): boolean {
-  return match.status === "confirmed" || match.status === "picked" || match.status === "missing";
-}
-
 export function applyAutoMatch(state: AppState): AppState {
   const rows = listRows(state.uploads);
   const index = buildCatalogIndex(state.catalog);
   const codes = new Set(state.catalog.map((item) => item.code));
   const matches: Record<string, MatchDecision> = { ...state.matches };
+  let productMemory = state.productMemory;
   for (const row of rows) {
     const previous = state.matches[row.key];
-    if (previous && isManual(previous) && (previous.status === "missing" || codes.has(previous.code))) {
+    if (previous && (previous.status === "confirmed" || previous.status === "picked") && codes.has(previous.code)) {
       matches[row.key] = previous;
+      if (recallProduct(productMemory, row).kind === "none") {
+        productMemory = saveKnownMatch({ ...state, productMemory }, row.key, previous).productMemory;
+      }
+      continue;
+    }
+    if (previous?.status === "missing") {
+      matches[row.key] = previous;
+      continue;
+    }
+    const recalled = recallProduct(productMemory, row, state.reviewPasses);
+    if (recalled.kind === "rejected") {
+      matches[row.key] = { status: "rejected", code: "", confidence: recalled.confidence, reason: recalled.reason };
+      continue;
+    }
+    if (recalled.kind === "review") {
+      matches[row.key] = { status: "review", code: "", confidence: recalled.confidence, reason: recalled.reason };
+      continue;
+    }
+    if (recalled.kind === "matched" && (codes.size === 0 || codes.has(recalled.code))) {
+      matches[row.key] = {
+        status: recalled.matchStatus === "picked" ? "picked" : "confirmed",
+        code: recalled.code,
+        confidence: recalled.confidence,
+        reason: recalled.reason,
+      };
       continue;
     }
     matches[row.key] = suggestMatch(row, index);
   }
-  return { ...state, matches, seenReady: true };
+  return { ...state, matches, productMemory, seenReady: true };
+}
+
+export function dismissReview(state: AppState, key: string): AppState {
+  const row = listRows(state.uploads).find((item) => item.key === key);
+  if (!row) return state;
+  return applyAutoMatch({
+    ...state,
+    reviewPasses: { ...state.reviewPasses, [passKey(row)]: true },
+  });
 }

@@ -14,7 +14,9 @@ import { CatalogPicker } from "./CatalogPicker";
 
 const filters: Array<{ id: MatchFilter; label: string }> = [
   { id: "need", label: "Нужно решить" },
+  { id: "review", label: "На проверке" },
   { id: "confirmed", label: "Подтверждено" },
+  { id: "rejected", label: "Не работаем" },
   { id: "missing", label: "Отсутствует" },
   { id: "resolved", label: "Всё решено" },
 ];
@@ -26,7 +28,7 @@ interface PickerState {
 }
 
 export function MatchingTab() {
-  const { state, notice, clearNotice, confirmMatch, offerAlternative, pickMatch, markMissing } = useAppState();
+  const { state, notice, clearNotice, confirmMatch, offerAlternative, pickMatch, markMissing, rejectMatch, releaseMatch, dismissReviewMatch } = useAppState();
   const [supplier, setSupplier] = useState("");
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<MatchFilter>("need");
@@ -39,7 +41,17 @@ export function MatchingTab() {
     () => (supplier ? rows.filter((row) => row.supplier === supplier) : rows),
     [rows, supplier],
   );
+  const rejectedMemory = useMemo(
+    () =>
+      Object.values(state.productMemory)
+        .filter((item) => item.verdict === "rejected")
+        .filter((item) => (supplier ? item.supplier === supplier : true))
+        .sort((a, b) => a.traits.name.localeCompare(b.traits.name, "ru") || a.supplier.localeCompare(b.supplier, "ru")),
+    [state.productMemory, supplier],
+  );
+  const rejectedVisible = rejectedMemory.filter((item) => matchesQuery([item.traits.name, item.supplier, item.traits.barcode, item.traits.kind], query));
   const needCount = scoped.filter((row) => (state.matches[row.key] ?? EMPTY_MATCH).status === "need").length;
+  const reviewCount = scoped.filter((row) => (state.matches[row.key] ?? EMPTY_MATCH).status === "review").length;
   const confirmedCount = scoped.filter((row) => {
     const status = (state.matches[row.key] ?? EMPTY_MATCH).status;
     return status === "confirmed" || status === "picked";
@@ -66,7 +78,7 @@ export function MatchingTab() {
     setPicker({ key, top, left });
   }
 
-  if (rows.length === 0) {
+  if (rows.length === 0 && rejectedMemory.length === 0) {
     return (
       <Card title="Сопоставление">
         <Hint>
@@ -104,7 +116,7 @@ export function MatchingTab() {
         <FilterBar value={filter} options={filters} onChange={setFilter} />
       </div>
       <p className="text-sm text-mute">
-        {needCount} нужно решить, {confirmedCount} подтверждено
+        {needCount} нужно решить, {reviewCount} на проверке, {confirmedCount} подтверждено, {rejectedMemory.length} не работаем
       </p>
       {state.catalog.length === 0 ? (
         <Hint>Загрузите номенклатуру из 1С на вкладке «Сегодня», чтобы появились предложения.</Hint>
@@ -117,7 +129,44 @@ export function MatchingTab() {
           </Button>
         </div>
       ) : null}
-      {visible.length === 0 ? (
+      {filter === "rejected" ? (
+        rejectedVisible.length === 0 ? (
+          <Card title="Не работаем">
+            <Hint>Нет товаров, по которым принято решение «Не работаем».</Hint>
+          </Card>
+        ) : (
+          <div className="max-h-[70vh] overflow-auto rounded-[10px] border border-slate-200 bg-white shadow-card">
+            <table className="w-full min-w-[720px] table-fixed border-collapse text-sm">
+              <thead>
+                <tr>
+                  {["Номенклатура поставщика", "Поставщик", "Штрихкод", "Действие"].map((title) => (
+                    <th
+                      key={title}
+                      className="sticky top-0 z-10 bg-white px-3 py-2 text-left align-top text-xs font-semibold text-brand shadow-[inset_0_-1px_0_#E5E7EB]"
+                    >
+                      {title}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {rejectedVisible.slice(0, pager.count).map((item) => (
+                  <tr key={item.id} className="border-b border-black/5 bg-slate-50">
+                    <td className="break-words px-3 py-2 align-top">{item.traits.name}</td>
+                    <td className="break-words px-3 py-2 align-top">{item.supplier}</td>
+                    <td className="break-words px-3 py-2 align-top">{item.traits.barcode || "—"}</td>
+                    <td className="px-3 py-2 align-top">
+                      <Button variant="ghost" onClick={() => releaseMatch(item.id)}>
+                        Вернуть в работу
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )
+      ) : visible.length === 0 ? (
         <Card title="Номенклатура">
           <Hint>Нет товаров в этом фильтре.</Hint>
         </Card>
@@ -179,6 +228,14 @@ export function MatchingTab() {
                         <Button variant="ghost" disabled={match.status === "missing"} onClick={() => markMissing(row.key)}>
                           Нет в каталоге
                         </Button>
+                        <Button variant="ghost" onClick={() => rejectMatch(row.key)}>
+                          Не работаем
+                        </Button>
+                        {match.status === "review" ? (
+                          <Button variant="ghost" onClick={() => dismissReviewMatch(row.key)}>
+                            Это другой товар
+                          </Button>
+                        ) : null}
                       </div>
                     </td>
                   </tr>
@@ -188,14 +245,15 @@ export function MatchingTab() {
           </table>
         </div>
       )}
-      {pager.count < filtered.length ? (
+      {pager.count < (filter === "rejected" ? rejectedVisible.length : filtered.length) ? (
         <Button variant="secondary" onClick={pager.showMore}>
           Показать ещё
         </Button>
       ) : null}
-      {filtered.length > 0 ? (
+      {(filter === "rejected" ? rejectedVisible.length : filtered.length) > 0 ? (
         <Hint>
-          Показано {Math.min(pager.count, filtered.length)} из {filtered.length}
+          Показано {Math.min(pager.count, filter === "rejected" ? rejectedVisible.length : filtered.length)} из{" "}
+          {filter === "rejected" ? rejectedVisible.length : filtered.length}
         </Hint>
       ) : null}
       {picker ? (

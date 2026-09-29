@@ -1,7 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { AppState, CatalogItem, ColumnMapper, SupplierCard, Upload } from "../types";
 import { absentKey, todayISO } from "../utils/format";
-import { applyAutoMatch, buildCatalogIndex, suggestMatch } from "../utils/matching";
+import { applyAutoMatch, buildCatalogIndex, dismissReview, suggestMatch } from "../utils/matching";
+import { rejectProduct, releaseProduct, saveKnownMatch } from "../utils/productMemory";
 import { acceptCurrentPrice, upsertSupplier, type AcceptedPrice } from "../utils/procurement";
 import { loadPersistedState, savePersistedState } from "../utils/persist";
 import { listRows } from "../utils/rows";
@@ -29,6 +30,9 @@ interface AppApi {
   offerAlternative: (key: string) => void;
   pickMatch: (key: string, code: string) => void;
   markMissing: (key: string) => void;
+  rejectMatch: (key: string) => void;
+  releaseMatch: (memoryId: string) => void;
+  dismissReviewMatch: (key: string) => void;
   confirmOrder: (code: string, supplier: string, price: number) => void;
   markAbsent: (code: string, supplier: string) => void;
 }
@@ -154,13 +158,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     setState((prev) => {
       const current = prev.matches[key];
       if (!current?.code) return prev;
-      const cleared = { ...prev.cleared };
-      delete cleared[key];
-      return {
-        ...prev,
-        cleared,
-        matches: { ...prev.matches, [key]: { ...current, status: "confirmed" } },
-      };
+      return saveKnownMatch(prev, key, { ...current, status: "confirmed" });
     });
   }, []);
 
@@ -187,18 +185,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
 
   const pickMatch = useCallback((key: string, code: string) => {
     setNotice(null);
-    setState((prev) => {
-      const cleared = { ...prev.cleared };
-      delete cleared[key];
-      return {
-        ...prev,
-        cleared,
-        matches: {
-          ...prev.matches,
-          [key]: { status: "picked", code, confidence: 100, reason: "выбрано вручную" },
-        },
-      };
-    });
+    setState((prev) => saveKnownMatch(prev, key, { status: "picked", code, confidence: 100, reason: "выбрано вручную" }));
   }, []);
 
   const markMissing = useCallback((key: string) => {
@@ -211,6 +198,21 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         [key]: { status: "missing", code: "", confidence: 0, reason: "" },
       },
     }));
+  }, []);
+
+  const rejectMatch = useCallback((key: string) => {
+    setNotice(null);
+    setState((prev) => rejectProduct(prev, key));
+  }, []);
+
+  const releaseMatch = useCallback((memoryId: string) => {
+    setNotice(null);
+    setState((prev) => applyAutoMatch(releaseProduct(prev, memoryId)));
+  }, []);
+
+  const dismissReviewMatch = useCallback((key: string) => {
+    setNotice(null);
+    setState((prev) => dismissReview(prev, key));
   }, []);
 
   const confirmOrder = useCallback((code: string, supplier: string, price: number) => {
@@ -254,6 +256,9 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       offerAlternative,
       pickMatch,
       markMissing,
+      rejectMatch,
+      releaseMatch,
+      dismissReviewMatch,
       confirmOrder,
       markAbsent,
     }),
@@ -272,6 +277,9 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       offerAlternative,
       pickMatch,
       markMissing,
+      rejectMatch,
+      releaseMatch,
+      dismissReviewMatch,
       confirmOrder,
       markAbsent,
     ],

@@ -1,8 +1,8 @@
-export type MatchStatus = "need" | "confirmed" | "picked" | "missing";
+export type MatchStatus = "need" | "confirmed" | "picked" | "missing" | "rejected" | "review";
 
 export type PriceFilter = "all" | "need" | "confirmed" | "missing";
 
-export type MatchFilter = "need" | "confirmed" | "missing" | "resolved";
+export type MatchFilter = "need" | "confirmed" | "missing" | "resolved" | "rejected" | "review";
 
 /** supplier, name, price, barcode, code, unit, filename, stock, pack, multiplicity, supplierCode, volume */
 export type PriceTuple = [
@@ -153,6 +153,33 @@ export interface MatchDecision {
   reason: string;
 }
 
+/** Устойчивые признаки товара поставщика. Код поставщика сюда не входит. */
+export interface ProductTraits {
+  barcode: string;
+  name: string;
+  brands: string[];
+  kind: string;
+  purpose: string;
+  variants: string[];
+  ml: number;
+  g: number;
+  pack: string;
+  unit: string;
+}
+
+/** Постоянное решение по товару поставщика. Не зависит от актуального прайса. */
+export interface ProductMemory {
+  id: string;
+  supplierId: string;
+  supplier: string;
+  verdict: "rejected" | "matched";
+  catalogCode: string;
+  matchStatus: "confirmed" | "picked" | "";
+  reason: string;
+  traits: ProductTraits;
+  updatedAt: string;
+}
+
 export interface ConfirmedChoice {
   supplier: string;
   price: number;
@@ -165,6 +192,8 @@ export interface AppState {
   catalog: CatalogItem[];
   mappers: Record<string, ColumnMapper>;
   matches: Record<string, MatchDecision>;
+  productMemory: Record<string, ProductMemory>;
+  reviewPasses: Record<string, boolean>;
   confirmed: Record<string, ConfirmedChoice>;
   absent: Record<string, string>;
   cleared: Record<string, boolean>;

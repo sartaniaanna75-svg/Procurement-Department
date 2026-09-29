@@ -72,6 +72,8 @@ async function readDatabase(): Promise<AppState | null> {
       notInPrice: prices?.notInPrice ?? {},
       priceHistory: prices?.priceHistory ?? {},
       matches: matching?.matches ?? {},
+      productMemory: matching?.productMemory ?? {},
+      reviewPasses: matching?.reviewPasses ?? {},
       confirmed: matching?.confirmed ?? {},
       absent: matching?.absent ?? {},
       cleared: matching?.cleared ?? {},
@@ -104,6 +106,8 @@ async function writeDatabase(state: AppState): Promise<void> {
     transaction.objectStore("matching").put(
       {
         matches: state.matches,
+        productMemory: state.productMemory,
+        reviewPasses: state.reviewPasses,
         confirmed: state.confirmed,
         absent: state.absent,
         cleared: state.cleared,

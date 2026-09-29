@@ -35,9 +35,11 @@ export function plural(count: number, one: string, few: string, many: string): s
 
 export function passesFilter(status: MatchStatus, filter: PriceFilter | MatchFilter): boolean {
   if (filter === "all") return true;
-  if (filter === "resolved") return status !== "need";
+  if (filter === "resolved") return status === "confirmed" || status === "picked" || status === "missing";
   if (filter === "confirmed") return status === "confirmed" || status === "picked";
   if (filter === "missing") return status === "missing";
+  if (filter === "rejected") return status === "rejected";
+  if (filter === "review") return status === "review";
   return status === "need";
 }
 
@@ -51,14 +53,20 @@ export function statusLabel(status: MatchStatus): string {
       return "Выбрано";
     case "missing":
       return "Отсутствует";
+    case "rejected":
+      return "Не работаем";
+    case "review":
+      return "На проверке";
   }
 }
 
 export function statusRowClass(status: MatchStatus, unitConflict: boolean): string {
+  if (status === "rejected") return "bg-slate-50";
   if (status === "missing" || (unitConflict && status !== "confirmed" && status !== "picked")) {
     return "bg-red-50";
   }
   if (status === "confirmed" || status === "picked") return "bg-green-50";
+  if (status === "review") return "bg-orange-50";
   return "bg-amber-50";
 }
 

@@ -1,6 +1,7 @@
 import type {
   AppState,
   ColumnMapper,
+  DisplayRow,
   DraftOrder,
   IsoWeekday,
   NotInPriceItem,
@@ -12,6 +13,7 @@ import type {
   Upload,
 } from "../types";
 import { applyAutoMatch } from "./matching";
+import { rememberedInBoth } from "./productMemory";
 import { matchKey, toRow } from "./rows";
 import { rememberSignals, type SupplierSignals } from "./suppliers";
 import { supplierKey } from "./text";
@@ -148,10 +150,15 @@ export function acceptCurrentPrice(state: AppState, input: AcceptedPrice): Accep
   };
 
   const previous = currentUpload(state, card.id);
-  const nextKeys = new Set(stamped.map((tuple) => toRow(tuple).key));
+  const nextRows = stamped.map((tuple) => toRow(tuple));
+  const nextKeys = new Set(nextRows.map((row) => row.key));
   const notInPrice = { ...state.notInPrice };
-  const kept = (notInPrice[card.id] ?? []).filter((item) => !nextKeys.has(itemKey(card.name, item)));
-  const disappeared = previous ? missingItems(card.id, previous, nextKeys) : [];
+  const kept = (notInPrice[card.id] ?? []).filter((item) => {
+    if (nextKeys.has(itemKey(card.name, item))) return false;
+    const stored = toRow([card.name, item.name, item.lastPrice, item.barcode, item.code, item.unit, "", "", "", "", "", ""]);
+    return !rememberedInBoth(state.productMemory, stored, nextRows);
+  });
+  const disappeared = previous ? missingItems(card.id, previous, nextKeys, state.productMemory, nextRows) : [];
   notInPrice[card.id] = [...kept, ...disappeared.filter((item) => !kept.some((other) => itemKey(card.name, other) === itemKey(card.name, item)))];
 
   const priceHistory = appendHistory(state, card.name, previous, stamped, versionId, receivedAt);
@@ -201,12 +208,18 @@ function itemKey(supplier: string, item: NotInPriceItem): string {
   return matchKey(supplier, item.name, item.code, item.barcode, item.unit);
 }
 
-function missingItems(supplierId: string, previous: Upload, nextKeys: Set<string>): NotInPriceItem[] {
+function missingItems(
+  supplierId: string,
+  previous: Upload,
+  nextKeys: Set<string>,
+  memory: AppState["productMemory"],
+  nextRows: DisplayRow[],
+): NotInPriceItem[] {
   const items: NotInPriceItem[] = [];
   const seen = new Set<string>();
   for (const tuple of previous.rows) {
     const row = toRow(tuple);
-    if (nextKeys.has(row.key) || seen.has(row.key)) continue;
+    if (nextKeys.has(row.key) || seen.has(row.key) || rememberedInBoth(memory, row, nextRows)) continue;
     seen.add(row.key);
     items.push({
       supplierId,
@@ -385,6 +398,13 @@ export function renameSupplier(state: AppState, fromName: string, toName: string
   const from = fromName.trim();
   const to = toName.trim();
   if (!from || !to) return state;
+  const renameMemory = (memory: AppState["productMemory"]): AppState["productMemory"] => {
+    const next: AppState["productMemory"] = {};
+    for (const [id, item] of Object.entries(memory)) {
+      next[id] = supplierKey(item.supplier) === supplierKey(from) ? { ...item, supplier: to } : item;
+    }
+    return next;
+  };
   if (supplierKey(from) === supplierKey(to)) {
     const retitle = (upload: Upload): Upload =>
       supplierKey(upload.supplier) === supplierKey(from) ? { ...upload, supplier: to, rows: upload.rows.map((tuple) => withSupplier(tuple, to)) } : upload;
@@ -393,6 +413,7 @@ export function renameSupplier(state: AppState, fromName: string, toName: string
       suppliers: state.suppliers.map((card) => (supplierKey(card.name) === supplierKey(from) ? { ...card, name: to } : card)),
       uploads: state.uploads.map(retitle),
       heldPrices: state.heldPrices.map(retitle),
+      productMemory: renameMemory(state.productMemory),
     };
   }
   const rewrite = (key: string) => {
@@ -436,6 +457,7 @@ export function renameSupplier(state: AppState, fromName: string, toName: string
     heldPrices: state.heldPrices.map(mapUpload),
     suppliers: state.suppliers.map((card) => (supplierKey(card.name) === supplierKey(from) ? { ...card, name: to } : card)),
     matches,
+    productMemory: renameMemory(state.productMemory),
     priceHistory,
     seen,
     cleared,
