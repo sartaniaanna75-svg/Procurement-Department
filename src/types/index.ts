@@ -76,7 +76,7 @@ export interface SupplierSchedule {
 /** Откуда берётся предложение. Сайт и ручной источник не требуют файла прайса. */
 export type OfferSource = "price" | "site" | "manual" | "api";
 
-/** Режим закупки. Расчёт по режиму — отдельная задача, карточка только хранит выбор. */
+/** Режим закупки. Дни заказа нужны для «по графику» и смешанного режима. */
 export type PurchaseMode = "schedule" | "demand" | "manual" | "mixed";
 
 export interface SupplierCard {
@@ -215,6 +215,8 @@ export interface AppState {
   priceHistory: Record<string, PricePoint[]>;
   draftOrders: DraftOrder[];
   priceWatch: PriceWatch[];
+  /** Потребность в закупке по поставщику. Расчёт потребности сюда только записывает да или нет. */
+  purchaseNeed: Record<string, boolean>;
 }
 
 export interface DisplayRow {

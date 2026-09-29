@@ -81,6 +81,7 @@ async function readDatabase(): Promise<AppState | null> {
       seenReady: matching?.seenReady ?? false,
       suppliers: suppliers?.suppliers ?? [],
       mappers: suppliers?.mappers ?? {},
+      purchaseNeed: suppliers?.purchaseNeed ?? {},
       draftOrders: documents?.draftOrders ?? [],
       priceWatch: documents?.priceWatch ?? [],
     });
@@ -116,7 +117,7 @@ async function writeDatabase(state: AppState): Promise<void> {
       },
       "decisions",
     );
-    transaction.objectStore("suppliers").put({ suppliers: state.suppliers, mappers: state.mappers }, "cards");
+    transaction.objectStore("suppliers").put({ suppliers: state.suppliers, mappers: state.mappers, purchaseNeed: state.purchaseNeed }, "cards");
     transaction.objectStore("documents").put({ draftOrders: state.draftOrders, priceWatch: state.priceWatch }, "orders");
     await transactionDone(transaction);
   } finally {

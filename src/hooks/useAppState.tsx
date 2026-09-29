@@ -3,7 +3,7 @@ import type { AppState, CatalogItem, ColumnMapper, SupplierCard, Upload } from "
 import { absentKey, todayISO } from "../utils/format";
 import { applyAutoMatch, buildCatalogIndex, dismissReview, suggestMatch } from "../utils/matching";
 import { rejectProduct, releaseProduct, saveKnownMatch } from "../utils/productMemory";
-import { acceptCurrentPrice, upsertSupplier, type AcceptedPrice } from "../utils/procurement";
+import { acceptCurrentPrice, setPurchaseNeed, upsertSupplier, type AcceptedPrice } from "../utils/procurement";
 import { loadPersistedState, savePersistedState } from "../utils/persist";
 import { listRows } from "../utils/rows";
 import { emptyState } from "../utils/storage";
@@ -22,6 +22,7 @@ interface AppApi {
   clearNotice: () => void;
   commitPrice: (upload: Upload, mapper: ColumnMapper) => void;
   saveSupplier: (card: SupplierCard) => void;
+  markPurchaseNeed: (supplierId: string, needed: boolean) => void;
   acceptSupplierPrice: (input: AcceptedPrice) => { ok: boolean; reason: string };
   acceptSupplierPrices: (inputs: AcceptedPrice[], card?: SupplierCard) => { ok: boolean; reason: string };
   correctSupplierPrice: (inputs: AcceptedPrice[], card?: SupplierCard) => { ok: boolean; reason: string };
@@ -96,6 +97,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
 
   const saveSupplier = useCallback((card: SupplierCard) => {
     setState((prev) => upsertSupplier(prev, card));
+  }, []);
+
+  const markPurchaseNeed = useCallback((supplierId: string, needed: boolean) => {
+    setState((prev) => setPurchaseNeed(prev, supplierId, needed));
   }, []);
 
   const applyPrice = useCallback((base: AppState, input: AcceptedPrice) => {
@@ -248,6 +253,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       clearNotice,
       commitPrice,
       saveSupplier,
+      markPurchaseNeed,
       acceptSupplierPrice,
       acceptSupplierPrices,
       correctSupplierPrice,
@@ -269,6 +275,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       clearNotice,
       commitPrice,
       saveSupplier,
+      markPurchaseNeed,
       acceptSupplierPrice,
       acceptSupplierPrices,
       correctSupplierPrice,

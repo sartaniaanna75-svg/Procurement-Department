@@ -15,7 +15,7 @@ import type {
 import { applyAutoMatch } from "./matching";
 import { rememberedInBoth } from "./productMemory";
 import { matchKey, toRow } from "./rows";
-import { rememberSignals, type SupplierSignals } from "./suppliers";
+import { oneCReady, rememberSignals, weekdayLabel, type SupplierSignals } from "./suppliers";
 import { supplierKey } from "./text";
 
 /**
@@ -39,6 +39,12 @@ export interface AcceptResult {
   cycleDate: string;
 }
 
+/** Состояние прайса. Не смешивается с датой закупки. */
+export type PriceFreshness = "received" | "expected" | "missing" | "stale" | "not_required";
+
+/** Когда закупка. Отдельно от того, получен ли прайс. */
+export type PurchaseTiming = "today" | "upcoming" | "on_demand";
+
 export interface CycleStatus {
   supplierId: string;
   name: string;
@@ -47,9 +53,37 @@ export interface CycleStatus {
   receivedAt: string;
   ready: boolean;
   level: "ready" | "waiting" | "attention" | "critical";
+  freshness: PriceFreshness;
+  timing: PurchaseTiming;
   text: string;
+  expectedAt: string;
+  reminder: boolean;
   oneCReady: boolean;
   watch: string;
+}
+
+export interface ProcurementBoard {
+  today: CycleStatus[];
+  upcoming: CycleStatus[];
+  missing: CycleStatus[];
+  expected: CycleStatus[];
+  demand: CycleStatus[];
+}
+
+/** Ответ для будущего почтового агента: нужен ли прайс и когда закупка. */
+export interface PurchaseAssessment {
+  supplierId: string;
+  priceFileRequired: boolean;
+  nearestOrderDate: string;
+  purchaseToday: boolean;
+  upcoming: boolean;
+  onDemand: boolean;
+  demandOpen: boolean;
+  freshness: PriceFreshness;
+  receivedAt: string;
+  expectedAt: string;
+  reminder: boolean;
+  responsible: string;
 }
 
 export function isoWeekday(date: Date): IsoWeekday {
@@ -114,13 +148,63 @@ export function nextOrderDate(orderDays: IsoWeekday[], from: Date, schedule: Sup
   return orderCycleDate(orderDays, from, schedule);
 }
 
-function priceCovers(upload: Upload, cycleDate: string, schedule: SupplierSchedule): boolean {
-  if (!cycleDate || upload.cycleDate !== cycleDate) return false;
-  if (schedule.validityDays == null) return true;
-  const received = new Date(upload.uploadedAt);
-  received.setHours(0, 0, 0, 0);
-  const age = (parseDay(cycleDate).getTime() - received.getTime()) / 86400000;
-  return age <= schedule.validityDays;
+function dayStart(date: Date): Date {
+  const next = new Date(date);
+  next.setHours(0, 0, 0, 0);
+  return next;
+}
+
+/** Файл прайса нужен только если источник — прайс. Сайт и ручной источник файл не требуют. */
+export function requiresPriceFile(card: SupplierCard): boolean {
+  return card.offerSource === "price";
+}
+
+export function hasPurchaseNeed(state: AppState, supplierId: string): boolean {
+  return state.purchaseNeed[supplierId] === true;
+}
+
+/** Будущий модуль потребности записывает сюда только да или нет. */
+export function setPurchaseNeed(state: AppState, supplierId: string, needed: boolean): AppState {
+  if (!supplierId) return state;
+  const purchaseNeed = { ...state.purchaseNeed };
+  if (needed) purchaseNeed[supplierId] = true;
+  else delete purchaseNeed[supplierId];
+  return { ...state, purchaseNeed };
+}
+
+function usesPlan(card: SupplierCard): boolean {
+  return card.active && (card.purchaseMode === "schedule" || card.purchaseMode === "mixed") && card.orderDays.length > 0;
+}
+
+function usesDemand(card: SupplierCard): boolean {
+  return card.active && (card.purchaseMode === "demand" || card.purchaseMode === "mixed");
+}
+
+/**
+ * Подходит ли текущий прайс к дате заказа.
+ * Пустой срок актуальности держит прайс на тот цикл, к которому он был отнесён.
+ * Заданный срок позволяет использовать прайс заранее, пока он не старше этого срока.
+ */
+export function fitPriceToOrder(upload: Upload | undefined, cycleDate: string, schedule: SupplierSchedule): { covers: boolean; stale: boolean } {
+  if (!upload || !cycleDate) return { covers: false, stale: false };
+  const received = dayStart(new Date(upload.uploadedAt));
+  const order = parseDay(cycleDate);
+  if (received.getTime() > order.getTime()) return { covers: false, stale: false };
+  if (schedule.validityDays != null) {
+    const age = (order.getTime() - received.getTime()) / 86400000;
+    return age > schedule.validityDays ? { covers: false, stale: true } : { covers: true, stale: false };
+  }
+  if (upload.cycleDate === cycleDate) return { covers: true, stale: false };
+  if (upload.cycleDate && upload.cycleDate < cycleDate) return { covers: false, stale: true };
+  return { covers: false, stale: false };
+}
+
+/** Актуальность текущего прайса на сегодня. Для закупки по потребности, без дня заказа. */
+export function fitCurrentPrice(upload: Upload | undefined, schedule: SupplierSchedule, now: Date): { covers: boolean; stale: boolean } {
+  if (!upload) return { covers: false, stale: false };
+  if (schedule.validityDays == null) return { covers: true, stale: false };
+  const age = (dayStart(now).getTime() - dayStart(new Date(upload.uploadedAt)).getTime()) / 86400000;
+  return age > schedule.validityDays ? { covers: false, stale: true } : { covers: true, stale: false };
 }
 
 function currentUpload(state: AppState, supplierId: string): Upload | undefined {
@@ -286,46 +370,119 @@ export function cycleText(receivedAt: string, cycleDate: string): string {
   return `Прайс получен ${received}. Для заказа ${formatDay(cycleDate)}. Готов к заказу.`;
 }
 
-export function procurementBoard(state: AppState, now = new Date()): { today: CycleStatus[]; tomorrow: CycleStatus[]; later: CycleStatus[] } {
-  const today = dateISO(now);
-  const tomorrowDate = new Date(now);
-  tomorrowDate.setDate(now.getDate() + 1);
-  const tomorrow = dateISO(tomorrowDate);
-  const todayItems: CycleStatus[] = [];
-  const tomorrowItems: CycleStatus[] = [];
-  const laterItems: CycleStatus[] = [];
+export function procurementBoard(state: AppState, now = new Date()): ProcurementBoard {
+  const today: CycleStatus[] = [];
+  const upcoming: CycleStatus[] = [];
+  const missing: CycleStatus[] = [];
+  const expected: CycleStatus[] = [];
+  const demand: CycleStatus[] = [];
   for (const card of state.suppliers) {
-    if (!card.active || card.orderDays.length === 0) continue;
-    if (card.orderDays.includes(isoWeekday(now))) todayItems.push(statusFor(state, card, today, now));
-    if (card.orderDays.includes(isoWeekday(tomorrowDate))) tomorrowItems.push(statusFor(state, card, tomorrow, now));
-    const upcoming = orderCycleDate(card.orderDays, now, card.schedule);
-    if (upcoming && upcoming !== today && upcoming !== tomorrow) laterItems.push(statusFor(state, card, upcoming, now));
+    const events = supplierEvents(state, card, now);
+    if (events.today) today.push(events.today);
+    if (events.upcoming) upcoming.push(events.upcoming);
+    const primary = events.today ?? events.upcoming;
+    if (primary && requiresPriceFile(card) && (primary.freshness === "missing" || primary.freshness === "stale")) missing.push(primary);
+    if (primary && requiresPriceFile(card) && primary.freshness === "expected") expected.push(primary);
+    if (events.demand) demand.push(events.demand);
   }
   const byName = (a: CycleStatus, b: CycleStatus) => a.name.localeCompare(b.name, "ru");
-  return { today: todayItems.sort(byName), tomorrow: tomorrowItems.sort(byName), later: laterItems.sort(byName) };
+  return {
+    today: today.sort(byName),
+    upcoming: upcoming.sort(byName),
+    missing: missing.sort(byName),
+    expected: expected.sort(byName),
+    demand: demand.sort(byName),
+  };
 }
 
-function statusFor(state: AppState, card: SupplierCard, cycleDate: string, now: Date): CycleStatus {
-  const upload = state.uploads.find((item) => item.supplierId === card.id && priceCovers(item, cycleDate, card.schedule));
+export function assessPurchase(state: AppState, card: SupplierCard, now = new Date()): PurchaseAssessment {
+  const events = supplierEvents(state, card, now);
+  const primary = events.today ?? events.upcoming ?? events.demand;
+  return {
+    supplierId: card.id,
+    priceFileRequired: requiresPriceFile(card) && (usesPlan(card) || (usesDemand(card) && hasPurchaseNeed(state, card.id))),
+    nearestOrderDate: events.today?.cycleDate || events.upcoming?.cycleDate || "",
+    purchaseToday: Boolean(events.today),
+    upcoming: Boolean(events.upcoming),
+    onDemand: Boolean(events.demand),
+    demandOpen: hasPurchaseNeed(state, card.id),
+    freshness: primary?.freshness ?? "not_required",
+    receivedAt: primary?.receivedAt ?? "",
+    expectedAt: primary?.expectedAt ?? "",
+    reminder: primary?.reminder ?? false,
+    responsible: card.responsible,
+  };
+}
+
+function supplierEvents(state: AppState, card: SupplierCard, now: Date): { today: CycleStatus | null; upcoming: CycleStatus | null; demand: CycleStatus | null } {
+  if (!card.active || card.purchaseMode === "manual") return { today: null, upcoming: null, demand: null };
+  let today: CycleStatus | null = null;
+  let upcoming: CycleStatus | null = null;
+  if (usesPlan(card)) {
+    const todayDate = dateISO(now);
+    if (card.orderDays.includes(isoWeekday(now))) today = orderStatus(state, card, todayDate, now, "today");
+    const next = nextOrderAfter(card, now);
+    if (next) upcoming = orderStatus(state, card, next, now, "upcoming");
+  }
+  return { today, upcoming, demand: demandStatus(state, card, now) };
+}
+
+function nextOrderAfter(card: SupplierCard, now: Date): string {
+  const tomorrow = dayStart(now);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  return orderCycleDate(card.orderDays, tomorrow, card.schedule);
+}
+
+function orderStatus(state: AppState, card: SupplierCard, cycleDate: string, now: Date, timing: PurchaseTiming): CycleStatus {
+  const upload = currentUpload(state, card.id);
   const watch = state.priceWatch.find((item) => item.supplierId === card.id && item.cycleDate === cycleDate);
-  const oneC = [card.oneC.guid, card.oneC.partnerGuid, card.oneC.counterpartyGuid, card.oneC.agreementGuid, card.oneC.contractGuid, card.oneC.organizationGuid].every((value) => value.trim());
-  if (upload) {
-    return {
-      supplierId: card.id,
-      name: card.name,
-      responsible: card.responsible,
-      cycleDate,
-      receivedAt: upload.uploadedAt,
-      ready: true,
-      level: "ready",
-      text: cycleText(upload.uploadedAt, cycleDate),
-      oneCReady: oneC,
-      watch: watch ? "После формирования заказа получен новый прайс." : "",
-    };
+  const base = blankStatus(card, cycleDate, timing, watch ? "После формирования заказа получен новый прайс." : "");
+  if (!requiresPriceFile(card)) {
+    return { ...base, ready: true, level: "ready", freshness: "not_required", receivedAt: upload?.uploadedAt ?? "", text: "Прайс-файл не требуется" };
+  }
+  const fit = fitPriceToOrder(upload, cycleDate, card.schedule);
+  if (fit.covers && upload) {
+    return { ...base, ready: true, level: "ready", freshness: "received", receivedAt: upload.uploadedAt, text: "Прайс получен" };
+  }
+  const expectedAt = expectedMoment(cycleDate, card.schedule);
+  if (fit.stale && upload) {
+    return { ...base, freshness: "stale", level: "critical", receivedAt: upload.uploadedAt, text: "Прайс устарел", expectedAt };
   }
   const deadline = cycleDeadline(cycleDate, card.schedule);
-  const critical = now.getTime() >= deadline.getTime();
-  const attention = critical || now.getTime() >= warningStart(cycleDate, card, deadline).getTime();
+  if (now.getTime() >= deadline.getTime()) {
+    return { ...base, freshness: "missing", level: "critical", text: "Нет актуального прайса к закупке", expectedAt };
+  }
+  const reminder = reminderDue(card, deadline, now);
+  return {
+    ...base,
+    freshness: "expected",
+    level: reminder ? "attention" : "waiting",
+    text: "Ожидаем прайс",
+    expectedAt,
+    reminder,
+  };
+}
+
+function demandStatus(state: AppState, card: SupplierCard, now: Date): CycleStatus | null {
+  if (!usesDemand(card) || !hasPurchaseNeed(state, card.id)) return null;
+  const upload = currentUpload(state, card.id);
+  const base = blankStatus(card, "", "on_demand", "");
+  if (!requiresPriceFile(card)) {
+    if (card.purchaseMode === "mixed") return null;
+    return { ...base, ready: true, level: "ready", freshness: "not_required", receivedAt: upload?.uploadedAt ?? "", text: "Прайс-файл не требуется" };
+  }
+  const fit = fitCurrentPrice(upload, card.schedule, now);
+  if (fit.covers) {
+    if (card.purchaseMode === "mixed") return null;
+    return { ...base, ready: true, level: "ready", freshness: "received", receivedAt: upload?.uploadedAt ?? "", text: "Прайс получен" };
+  }
+  if (fit.stale && upload) {
+    return { ...base, freshness: "stale", level: "critical", receivedAt: upload.uploadedAt, text: "Прайс устарел" };
+  }
+  return { ...base, freshness: "missing", level: "critical", text: "Есть потребность — требуется актуальный прайс" };
+}
+
+function blankStatus(card: SupplierCard, cycleDate: string, timing: PurchaseTiming, watch: string): CycleStatus {
   return {
     supplierId: card.id,
     name: card.name,
@@ -333,29 +490,32 @@ function statusFor(state: AppState, card: SupplierCard, cycleDate: string, now: 
     cycleDate,
     receivedAt: "",
     ready: false,
-    level: critical ? "critical" : attention ? "attention" : "waiting",
-    text: critical
-      ? "Прайс не получен. Заказ требует внимания."
-      : attention
-        ? `Нет актуального прайса от поставщика ${card.name} для заказа ${formatDay(cycleDate)}.`
-        : "Прайс ещё не получен.",
-    oneCReady: oneC,
-    watch: "",
+    level: "waiting",
+    freshness: "expected",
+    timing,
+    text: "",
+    expectedAt: "",
+    reminder: false,
+    oneCReady: oneCReady(card),
+    watch,
   };
 }
 
-function warningStart(cycleDate: string, card: SupplierCard, deadline: Date): Date {
+function expectedMoment(cycleDate: string, schedule: SupplierSchedule): string {
+  const deadline = cycleDeadline(cycleDate, schedule);
+  const clock = schedule.deadlineTime.trim() || "23:59";
+  const when = `${formatDay(dateISO(deadline))} ${clock}`;
+  if (schedule.expectFrom == null) return when;
+  const from = weekdayLabel(schedule.expectFrom);
+  const to = schedule.expectTo == null ? "" : weekdayLabel(schedule.expectTo);
+  const window = to && to !== from ? `${from}–${to}` : from;
+  return `${window}, крайний срок ${when}`;
+}
+
+function reminderDue(card: SupplierCard, deadline: Date, now: Date): boolean {
+  if (card.schedule.reminders.length === 0 || now.getTime() >= deadline.getTime()) return false;
   const hours = card.schedule.reminders.reduce((max, stage) => Math.max(max, stage.hoursBeforeDeadline), 0);
-  let start = new Date(deadline.getTime() - hours * 3600000);
-  const orderStart = parseDay(cycleDate);
-  if (hours === 0 && start.getTime() > orderStart.getTime()) start = orderStart;
-  if (card.schedule.expectFrom != null) {
-    const back = (isoWeekday(parseDay(cycleDate)) - card.schedule.expectFrom + 7) % 7;
-    const expect = parseDay(cycleDate);
-    expect.setDate(expect.getDate() - back);
-    if (expect.getTime() < start.getTime()) start = expect;
-  }
-  return start;
+  return now.getTime() >= deadline.getTime() - hours * 3600000;
 }
 
 export function upsertSupplier(state: AppState, card: SupplierCard): AppState {

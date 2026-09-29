@@ -14,12 +14,14 @@ function blankCard(): SupplierCard {
 }
 
 export function SuppliersTab() {
-  const { state, saveSupplier } = useAppState();
+  const { state, saveSupplier, markPurchaseNeed } = useAppState();
   const [draft, setDraft] = useState<SupplierCard | null>(null);
+  const [need, setNeed] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   function edit(card: SupplierCard) {
     setError(null);
+    setNeed(Boolean(state.purchaseNeed[card.id]));
     setDraft({
       ...card,
       oneC: { ...card.oneC },
@@ -44,6 +46,8 @@ export function SuppliersTab() {
       return;
     }
     saveSupplier(draft);
+    const tracksNeed = draft.purchaseMode === "demand" || draft.purchaseMode === "mixed";
+    markPurchaseNeed(draft.id, tracksNeed && need);
     setDraft(null);
     setError(null);
   }
@@ -137,7 +141,7 @@ export function SuppliersTab() {
               </select>
             </Field>
             {draft.offerSource === "site" || draft.offerSource === "manual" ? (
-              <Hint>Для этого источника отсутствие файла прайса не считается ошибкой. Автоматическая проверка будет позже.</Hint>
+              <Hint>Для этого источника отсутствие файла прайса не считается ошибкой.</Hint>
             ) : null}
             {draft.offerSource === "api" ? <Hint>Вариант для будущей интеграции. Сейчас он только сохраняется в карточке.</Hint> : null}
             <h3 className="text-sm font-semibold text-brand">Режим закупки</h3>
@@ -154,9 +158,18 @@ export function SuppliersTab() {
             </Field>
             <Hint>
               {scheduleUsesDays(draft.purchaseMode)
-                ? "Дни заказа понадобятся для графика. Сейчас их можно не заполнять."
-                : "Для этого режима фиксированные дни заказа не обязательны."}
+                ? "Плановые закупки идут по отмеченным дням. Если дни не заданы, календарь этого поставщика не ведёт."
+                : "Фиксированные дни заказа не обязательны и не создают предупреждение об отсутствии прайса."}
             </Hint>
+            {draft.purchaseMode === "demand" || draft.purchaseMode === "mixed" ? (
+              <>
+                <label className="flex items-center gap-2 text-sm">
+                  <input type="checkbox" checked={need} onChange={(event) => setNeed(event.target.checked)} />
+                  Есть потребность в закупке
+                </label>
+                <Hint>Пока отмечается вручную. Расчёт потребности будет отдельным модулем. Если потребности нет, отсутствие прайса ошибкой не считается.</Hint>
+              </>
+            ) : null}
             <div>
               <div className="mb-1 text-sm font-medium">Дни заказа</div>
               <div className="flex flex-wrap gap-2">

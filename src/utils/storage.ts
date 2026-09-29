@@ -23,6 +23,7 @@ export function emptyState(): AppState {
     priceHistory: {},
     draftOrders: [],
     priceWatch: [],
+    purchaseNeed: {},
   };
 }
 
@@ -412,7 +413,17 @@ export function normalizeState(value: unknown): AppState {
     priceWatch: Array.isArray(value.priceWatch)
       ? value.priceWatch.map(normalizeWatch).filter((item): item is PriceWatch => item !== null)
       : [],
+    purchaseNeed: normalizeNeed(value.purchaseNeed),
   };
+}
+
+function normalizeNeed(value: unknown): Record<string, boolean> {
+  if (!isPlain(value)) return {};
+  const need: Record<string, boolean> = {};
+  for (const [id, flag] of Object.entries(value)) {
+    if (flag === true && id.trim()) need[id] = true;
+  }
+  return need;
 }
 
 export function loadState(): AppState {
