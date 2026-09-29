@@ -18,6 +18,7 @@ export function emptyState(): AppState {
     cleared: {},
     seen: {},
     seenReady: false,
+    matchLogic: 0,
     suppliers: [],
     notInPrice: {},
     priceHistory: {},
@@ -70,7 +71,8 @@ function normalizeCatalogItem(value: unknown): CatalogItem | null {
   const code = String(value.code ?? "").trim();
   const name = String(value.name ?? "").trim();
   if (!code || !name) return null;
-  return { code, name, unit: String(value.unit ?? "").trim() };
+  const barcode = String(value.barcode ?? "").replace(/\D/g, "");
+  return { code, name, unit: String(value.unit ?? "").trim(), barcode: barcode.length >= 8 ? barcode : "" };
 }
 
 function mapperIndex(value: unknown, fallback = -1): number {
@@ -117,6 +119,7 @@ function normalizeMatch(value: unknown): MatchDecision | null {
     code: String(value.code ?? ""),
     confidence: Number.isFinite(Number(value.confidence)) ? Number(value.confidence) : 0,
     reason: String(value.reason ?? ""),
+    relation: value.relation === "alternative" ? "alternative" : "exact",
   };
 }
 
@@ -140,11 +143,12 @@ function normalizeTraits(value: unknown): ProductTraits | null {
     g: Number.isFinite(g) ? g : 0,
     pack: String(value.pack ?? ""),
     unit: String(value.unit ?? ""),
+    supplierCode: String(value.supplierCode ?? ""),
   };
 }
 
 function normalizeMemory(value: unknown): ProductMemory | null {
-  if (!isPlain(value) || (value.verdict !== "rejected" && value.verdict !== "matched")) return null;
+  if (!isPlain(value) || (value.verdict !== "rejected" && value.verdict !== "matched" && value.verdict !== "absent" && value.verdict !== "alternative")) return null;
   const traits = normalizeTraits(value.traits);
   if (!traits) return null;
   const id = String(value.id ?? "").trim();
@@ -404,6 +408,7 @@ export function normalizeState(value: unknown): AppState {
       return Number.isFinite(count) ? count : null;
     }),
     seenReady: Boolean(value.seenReady),
+    matchLogic: Number.isFinite(Number(value.matchLogic)) ? Number(value.matchLogic) : 0,
     suppliers: attached.suppliers,
     notInPrice: Object.keys(storedMissing).length > 0 ? storedMissing : attached.notInPrice,
     priceHistory: mapValues(value.priceHistory, normalizeHistory),

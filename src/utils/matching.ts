@@ -1,8 +1,16 @@
-import type { AppState, CatalogItem, DisplayRow, MatchDecision } from "../types";
-import { passKey, recallProduct, saveKnownMatch } from "./productMemory";
+import type { AppState, CatalogItem, DisplayRow, MatchDecision, ProductMemory } from "../types";
+import { catalogConflict, passKey, recallProduct, saveKnownMatch, type Recall } from "./productMemory";
 import { listRows } from "./rows";
 import { normCode } from "./text";
 import { unitsConflict } from "./units";
+
+export const MATCH_LOGIC = 2;
+
+function barcodeDigits(value: string): string {
+  if (/[^\d\s]/.test(value)) return "";
+  const digits = value.replace(/\D/g, "");
+  return digits.length === 8 || digits.length === 12 || digits.length === 13 || digits.length === 14 ? digits : "";
+}
 
 const STOP_WORDS = new Set([
   "и", "или", "в", "во", "на", "по", "для", "с", "со", "к", "ко", "от", "из", "у", "о", "об", "обо",
@@ -77,10 +85,11 @@ export function buildCatalogIndex(catalog: CatalogItem[]): CatalogIndex {
       list.push(item);
       byCode.set(codeKey, list);
     }
-    const digits = item.code.replace(/\D/g, "");
-    if (digits.length >= 8) {
+    for (const value of [item.code, item.barcode ?? ""]) {
+      const digits = barcodeDigits(value);
+      if (!digits) continue;
       const list = byBarcode.get(digits) ?? [];
-      list.push(item);
+      if (!list.some((other) => other.code === item.code)) list.push(item);
       byBarcode.set(digits, list);
     }
   });
@@ -88,19 +97,11 @@ export function buildCatalogIndex(catalog: CatalogItem[]): CatalogIndex {
   return { items: catalog, byCode, byBarcode, tokenToIds, expanded };
 }
 
-function lookupCode(index: CatalogIndex, code: string, unit: string, exclude?: string): CatalogItem | null {
-  const key = normCode(code);
-  if (!key) return null;
-  const found = (index.byCode.get(key) ?? []).filter((item) => item.code !== exclude);
-  return preferUnit(found, unit);
-}
-
 function lookupBarcode(index: CatalogIndex, barcode: string, unit: string, exclude?: string): CatalogItem | null {
-  // В выгрузке 1С нет отдельной колонки штрихкода, поэтому штрихкод поставщика сравнивается с кодом номенклатуры.
-  const key = normCode(barcode);
-  const digits = barcode.replace(/\D/g, "");
+  const digits = barcodeDigits(barcode);
+  const key = digits ? normCode(digits) : "";
   const fromCode = key ? (index.byCode.get(key) ?? []) : [];
-  const fromDigits = digits.length >= 8 ? (index.byBarcode.get(digits) ?? []) : [];
+  const fromDigits = digits ? (index.byBarcode.get(digits) ?? []) : [];
   const merged = [...fromCode, ...fromDigits].filter((item, itemIndex, list) => {
     return item.code !== exclude && list.findIndex((other) => other.code === item.code) === itemIndex;
   });
@@ -108,8 +109,7 @@ function lookupBarcode(index: CatalogIndex, barcode: string, unit: string, exclu
 }
 
 function confidenceFromRatio(ratio: number): number | null {
-  if (ratio >= 0.999) return 90;
-  if (ratio >= 0.75) return 70;
+  if (ratio >= 0.75) return 75;
   if (ratio >= 0.5) return 50;
   return null;
 }
@@ -131,12 +131,15 @@ function fuzzyFind(
   if (keywords.length === 0) return null;
   const anchors = keywords.filter((keyword) => /\p{L}/u.test(keyword) && keyword.length >= 3);
   const seeds = anchors.length > 0 ? anchors : keywords;
-  const candidateIds = new Set<number>();
+  let rarest: number[] = [];
   for (const keyword of seeds) {
     for (const token of expand([keyword])) {
-      for (const id of index.tokenToIds.get(token) ?? []) candidateIds.add(id);
+      const list = index.tokenToIds.get(token);
+      if (!list || list.length === 0) continue;
+      if (rarest.length === 0 || list.length < rarest.length) rarest = list;
     }
   }
+  const candidateIds = new Set(rarest.slice(0, 400));
 
   let best: { item: CatalogItem; confidence: number; letters: number; unitRank: number; sizeGap: number } | null = null;
   for (const id of candidateIds) {
@@ -176,58 +179,98 @@ function fuzzyFind(
 }
 
 export function suggestMatch(row: DisplayRow, index: CatalogIndex, excludeCode?: string): MatchDecision {
-  const empty: MatchDecision = { status: "need", code: "", confidence: 0, reason: "" };
+  const empty: MatchDecision = { status: "need", code: "", confidence: 0, reason: "", relation: "exact" };
   if (index.items.length === 0) return empty;
-
-  const byCode = lookupCode(index, row.code, row.unit, excludeCode);
-  if (byCode) {
-    return applyUnit({ status: "need", code: byCode.code, confidence: 100, reason: "по коду" }, row.unit, byCode);
-  }
 
   const byBarcode = lookupBarcode(index, row.barcode, row.unit, excludeCode);
   if (byBarcode) {
-    return applyUnit(
-      { status: "need", code: byBarcode.code, confidence: 100, reason: "по штрихкоду" },
-      row.unit,
-      byBarcode,
-    );
+    const conflict = catalogConflict(row, byBarcode.name);
+    if (conflict) {
+      return { status: "review", code: byBarcode.code, confidence: 40, reason: `${conflict}. В каталоге: «${byBarcode.name}».`, relation: "exact" };
+    }
+    if (unitsConflict(row.unit, byBarcode.unit)) {
+      return { status: "review", code: byBarcode.code, confidence: 70, reason: "по штрихкоду, единица не совпала", relation: "exact" };
+    }
+    return { status: "confirmed", code: byBarcode.code, confidence: 100, reason: "по штрихкоду", relation: "exact" };
   }
 
   const fuzzy = fuzzyFind(row, index, excludeCode);
   if (!fuzzy) return empty;
+  const status = fuzzy.confidence >= 70 ? "review" : "need";
   return applyUnit(
-    { status: "need", code: fuzzy.item.code, confidence: fuzzy.confidence, reason: "по названию" },
+    { status, code: fuzzy.item.code, confidence: fuzzy.confidence, reason: "по названию", relation: "exact" },
     row.unit,
     fuzzy.item,
   );
 }
 
-export function applyAutoMatch(state: AppState): AppState {
+function memoryBuckets(memory: AppState["productMemory"]): Map<string, ProductMemory[]> {
+  const buckets = new Map<string, ProductMemory[]>();
+  for (const item of Object.values(memory)) pushMemory(buckets, item);
+  return buckets;
+}
+
+function pushMemory(buckets: Map<string, ProductMemory[]>, item: ProductMemory): void {
+  const keys = [item.supplierId, item.supplier.trim().toLowerCase()].filter(Boolean);
+  for (const key of keys) {
+    const list = buckets.get(key) ?? [];
+    const index = list.findIndex((other) => other.id === item.id);
+    if (index >= 0) list[index] = item;
+    else list.push(item);
+    buckets.set(key, list);
+  }
+}
+
+function bucketFor(buckets: Map<string, ProductMemory[]>, row: DisplayRow): ProductMemory[] | undefined {
+  return buckets.get(row.supplierId) ?? buckets.get(row.supplier.trim().toLowerCase());
+}
+
+export function applyAutoMatch(state: AppState, options?: { reconsiderAbsent?: boolean }): AppState {
   const rows = listRows(state.uploads);
   const index = buildCatalogIndex(state.catalog);
   const codes = new Set(state.catalog.map((item) => item.code));
   const matches: Record<string, MatchDecision> = { ...state.matches };
   let productMemory = state.productMemory;
+  let buckets = memoryBuckets(productMemory);
+  const remember = (rowKey: string, decision: MatchDecision) => {
+    const saved = saveKnownMatch({ ...state, productMemory, matches }, rowKey, decision);
+    for (const item of Object.values(saved.productMemory)) {
+      if (productMemory[item.id] !== item) pushMemory(buckets, item);
+    }
+    productMemory = saved.productMemory;
+    matches[rowKey] = saved.matches[rowKey] ?? decision;
+  };
   for (const row of rows) {
+    const bucket = bucketFor(buckets, row);
     const previous = state.matches[row.key];
-    if (previous && (previous.status === "confirmed" || previous.status === "picked") && codes.has(previous.code)) {
-      matches[row.key] = previous;
-      if (recallProduct(productMemory, row).kind === "none") {
-        productMemory = saveKnownMatch({ ...state, productMemory }, row.key, previous).productMemory;
-      }
-      continue;
-    }
-    if (previous?.status === "missing") {
-      matches[row.key] = previous;
-      continue;
-    }
-    const recalled = recallProduct(productMemory, row, state.reviewPasses);
-    if (recalled.kind === "rejected") {
-      matches[row.key] = { status: "rejected", code: "", confidence: recalled.confidence, reason: recalled.reason };
+    const recalled = recallProduct(productMemory, row, state.reviewPasses, bucket);
+    const barred = barcodeReview(row, index, recalled);
+    if (barred) {
+      matches[row.key] = barred;
       continue;
     }
     if (recalled.kind === "review") {
-      matches[row.key] = { status: "review", code: "", confidence: recalled.confidence, reason: recalled.reason };
+      matches[row.key] = decisionFromRecall(recalled);
+      continue;
+    }
+    if (previous && (previous.status === "confirmed" || previous.status === "picked") && codes.has(previous.code) && recalled.kind !== "rejected") {
+      matches[row.key] = previous;
+      if (recalled.kind === "none") remember(row.key, previous);
+      continue;
+    }
+    if (recalled.kind === "rejected") {
+      matches[row.key] = { status: "rejected", code: "", confidence: recalled.confidence, reason: recalled.reason, relation: "exact" };
+      continue;
+    }
+    if (recalled.kind === "alternative") {
+      matches[row.key] = { status: "review", code: recalled.code, confidence: recalled.confidence, reason: recalled.reason, relation: "alternative" };
+      continue;
+    }
+    if (recalled.kind === "absent") {
+      const fresh = options?.reconsiderAbsent ? suggestMatch(row, index) : null;
+      matches[row.key] = fresh?.code
+        ? { status: "review", code: fresh.code, confidence: fresh.confidence, reason: "Раньше товара не было в каталоге. Сейчас найдено возможное соответствие.", relation: "exact" }
+        : { status: "missing", code: "", confidence: 0, reason: "нет в каталоге", relation: "exact" };
       continue;
     }
     if (recalled.kind === "matched" && (codes.size === 0 || codes.has(recalled.code))) {
@@ -236,12 +279,42 @@ export function applyAutoMatch(state: AppState): AppState {
         code: recalled.code,
         confidence: recalled.confidence,
         reason: recalled.reason,
+        relation: "exact",
       };
       continue;
     }
-    matches[row.key] = suggestMatch(row, index);
+    if (previous?.status === "missing" && recalled.kind === "none") {
+      matches[row.key] = previous;
+      continue;
+    }
+    const suggested = suggestMatch(row, index);
+    if (suggested.status === "confirmed" && suggested.code) remember(row.key, suggested);
+    else matches[row.key] = suggested;
   }
-  return { ...state, matches, productMemory, seenReady: true };
+  return { ...state, matches, productMemory, seenReady: true, matchLogic: MATCH_LOGIC };
+}
+
+function barcodeReview(row: DisplayRow, index: CatalogIndex, recalled: Recall): MatchDecision | null {
+  const hit = lookupBarcode(index, row.barcode, row.unit);
+  if (!hit) return null;
+  const conflict = catalogConflict(row, hit.name);
+  const linked = recalled.kind === "matched" || recalled.kind === "alternative" ? recalled.code : "";
+  const elsewhere = Boolean(linked && linked !== hit.code);
+  if (!conflict && !elsewhere) return null;
+  const prior =
+    recalled.kind === "matched" && recalled.code
+      ? ` Раньше сопоставлено с ${recalled.code}. Сейчас: «${row.name}».`
+      : recalled.kind !== "none"
+        ? ` Раньше: ${recalled.reason || "было другое решение"}. Сейчас: «${row.name}».`
+        : "";
+  const reason = conflict
+    ? `${conflict}. В каталоге: «${hit.name}».${prior}`
+    : `Штрихкод совпадает, но название и характеристики товара существенно отличаются. В каталоге: «${hit.name}».${prior}`;
+  return { status: "review", code: hit.code, confidence: 40, reason, relation: "exact" };
+}
+
+function decisionFromRecall(recalled: Recall): MatchDecision {
+  return { status: "review", code: recalled.code, confidence: recalled.confidence, reason: recalled.reason, relation: "exact" };
 }
 
 export function dismissReview(state: AppState, key: string): AppState {

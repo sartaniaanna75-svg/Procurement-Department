@@ -20,6 +20,7 @@ const KIND_STEMS: Array<[string, string]> = [
   ["таблет", "таблетки"],
   ["салфет", "салфетки"],
   ["гель", "гель"],
+  ["дезодорант", "дезодорант"],
 ];
 
 const PURPOSE_STEMS: Array<[string, string]> = [
@@ -33,7 +34,7 @@ const PURPOSE_STEMS: Array<[string, string]> = [
 ];
 
 export interface Recall {
-  kind: "none" | "rejected" | "matched" | "review";
+  kind: "none" | "rejected" | "matched" | "review" | "absent" | "alternative";
   memoryId: string;
   code: string;
   matchStatus: "confirmed" | "picked" | "";
@@ -112,7 +113,22 @@ export function traitsFromRow(row: DisplayRow): ProductTraits {
     g: size.g,
     pack: row.pack.trim(),
     unit: row.unit.trim(),
+    supplierCode: row.supplierCode.trim(),
   };
+}
+
+/** Штрихкод совпал, но название описывает другой товар. Пустая строка — конфликта нет. */
+export function catalogConflict(row: DisplayRow, catalogName: string): string {
+  const left = traitsFromRow(row);
+  const right = traitsFromRow({ ...row, name: catalogName, volume: "", pack: "", barcode: left.barcode });
+  const problem = contradiction(left, right);
+  const leftCore = core(left);
+  const rightCore = core(right);
+  const overlap = jaccard(leftCore, rightCore);
+  if (problem || (leftCore.size > 0 && rightCore.size > 0 && overlap === 0)) {
+    return "Совпадает штрихкод, но существенно изменилось наименование товара";
+  }
+  return "";
 }
 
 export function passKey(row: DisplayRow): string {
@@ -186,25 +202,40 @@ function sameSupplier(memory: ProductMemory, row: DisplayRow): boolean {
   return supplierKey(memory.supplier) === supplierKey(row.supplier);
 }
 
-export function recallProduct(memory: Record<string, ProductMemory>, row: DisplayRow, passes: Record<string, boolean> = {}): Recall {
+export function recallProduct(memory: Record<string, ProductMemory>, row: DisplayRow, passes: Record<string, boolean> = {}, bucket?: ProductMemory[]): Recall {
   const traits = traitsFromRow(row);
+  const items = bucket ?? Object.values(memory).filter((item) => sameSupplier(item, row));
   let apply: { item: ProductMemory; score: number } | null = null;
   let review: { item: ProductMemory; score: number; problem: string } | null = null;
-  for (const item of Object.values(memory)) {
+  for (const item of items) {
     if (!sameSupplier(item, row)) continue;
-    const score = linkScore(traits, item.traits);
-    if (score <= 0) continue;
     const problem = contradiction(traits, item.traits);
+    const score = linkScore(traits, item.traits);
+    const codeClash = Boolean(traits.supplierCode && item.traits.supplierCode && traits.supplierCode === item.traits.supplierCode && problem);
+    if (score <= 0 && !codeClash) continue;
     if (!problem) {
       if (!apply || score > apply.score) apply = { item, score };
-    } else if (!review || score > review.score) {
-      review = { item, score, problem };
+    } else if (!review || Math.max(score, codeClash ? 40 : 0) > review.score) {
+      review = { item, score: Math.max(score, 40), problem };
     }
   }
   if (apply && (!review || apply.score >= review.score)) {
     const item = apply.item;
     if (item.verdict === "rejected") {
       return { kind: "rejected", memoryId: item.id, code: "", matchStatus: "", confidence: apply.score, reason: "не работаем" };
+    }
+    if (item.verdict === "absent") {
+      return { kind: "absent", memoryId: item.id, code: "", matchStatus: "", confidence: apply.score, reason: "нет в каталоге" };
+    }
+    if (item.verdict === "alternative") {
+      return {
+        kind: "alternative",
+        memoryId: item.id,
+        code: item.catalogCode,
+        matchStatus: "",
+        confidence: apply.score,
+        reason: item.reason || "Альтернатива нашей позиции",
+      };
     }
     return {
       kind: "matched",
@@ -216,14 +247,12 @@ export function recallProduct(memory: Record<string, ProductMemory>, row: Displa
     };
   }
   if (review && !passes[passKey(row)]) {
-    return {
-      kind: "review",
-      memoryId: review.item.id,
-      code: "",
-      matchStatus: "",
-      confidence: review.score,
-      reason: `На проверке: похоже на «${review.item.traits.name}», но ${review.problem}`,
-    };
+    const item = review.item;
+    const sameBarcode = Boolean(traits.barcode && item.traits.barcode && traits.barcode === item.traits.barcode);
+    const reason = sameBarcode
+      ? `Штрихкод совпадает, но название и характеристики товара существенно отличаются. Раньше: «${item.traits.name}». Сейчас: «${traits.name}». Наша номенклатура: ${item.catalogCode || "не была привязана"}.`
+      : `На проверке: похоже на «${item.traits.name}», но ${review.problem}`;
+    return { kind: "review", memoryId: item.id, code: item.catalogCode, matchStatus: "", confidence: review.score, reason };
   }
   return NONE;
 }
@@ -232,17 +261,17 @@ function supplierIdFor(state: AppState, supplier: string): string {
   return state.suppliers.find((card) => supplierKey(card.name) === supplierKey(supplier))?.id ?? "";
 }
 
-function writeMemory(state: AppState, row: DisplayRow, verdict: "rejected" | "matched", decision: MatchDecision): Record<string, ProductMemory> {
+function writeMemory(state: AppState, row: DisplayRow, verdict: ProductMemory["verdict"], decision: MatchDecision): Record<string, ProductMemory> {
   const traits = traitsFromRow(row);
   const recalled = recallProduct(state.productMemory, row);
-  const reusable = recalled.kind === "rejected" || recalled.kind === "matched" ? state.productMemory[recalled.memoryId] : undefined;
+  const reusable = recalled.kind === "none" || recalled.kind === "review" ? undefined : state.productMemory[recalled.memoryId];
   const id = reusable?.id ?? `mem-${crypto.randomUUID()}`;
   const next: ProductMemory = {
     id,
     supplierId: reusable?.supplierId || row.supplierId || supplierIdFor(state, row.supplier),
     supplier: row.supplier,
     verdict,
-    catalogCode: verdict === "matched" ? decision.code : "",
+    catalogCode: verdict === "matched" || verdict === "alternative" ? decision.code : "",
     matchStatus: verdict === "matched" && decision.status === "picked" ? "picked" : verdict === "matched" ? "confirmed" : "",
     reason: decision.reason,
     traits,
@@ -264,6 +293,29 @@ export function rejectProduct(state: AppState, key: string): AppState {
     cleared,
     reviewPasses,
     productMemory: writeMemory(state, row, "rejected", decision),
+    matches: { ...state.matches, [key]: decision },
+  };
+}
+
+export function saveAbsent(state: AppState, key: string): AppState {
+  const row = listRows(state.uploads).find((item) => item.key === key);
+  if (!row) return state;
+  const decision: MatchDecision = { status: "missing", code: "", confidence: 0, reason: "нет в каталоге", relation: "exact" };
+  return {
+    ...state,
+    cleared: { ...state.cleared, [key]: true },
+    productMemory: writeMemory(state, row, "absent", decision),
+    matches: { ...state.matches, [key]: decision },
+  };
+}
+
+export function saveAlternative(state: AppState, key: string, code: string): AppState {
+  const row = listRows(state.uploads).find((item) => item.key === key);
+  if (!row || !code) return state;
+  const decision: MatchDecision = { status: "review", code, confidence: 0, reason: "Альтернатива нашей позиции", relation: "alternative" };
+  return {
+    ...state,
+    productMemory: writeMemory(state, row, "alternative", decision),
     matches: { ...state.matches, [key]: decision },
   };
 }

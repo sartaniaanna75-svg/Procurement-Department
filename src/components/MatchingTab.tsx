@@ -4,7 +4,7 @@ import { useAppState } from "../hooks/useAppState";
 import { useShowMore } from "../hooks/useShowMore";
 import type { MatchFilter } from "../types";
 import { EMPTY_MATCH } from "../types";
-import { passesFilter, statusLabel, statusRowClass } from "../utils/format";
+import { confidenceLabel, passesFilter, plural, statusLabel, statusRowClass } from "../utils/format";
 import { catalogMap, listRows, ourNomenclature, summarizeSuppliers } from "../utils/rows";
 import { matchesQuery } from "../utils/search";
 import { unitsConflict } from "../utils/units";
@@ -17,7 +17,7 @@ const filters: Array<{ id: MatchFilter; label: string }> = [
   { id: "review", label: "На проверке" },
   { id: "confirmed", label: "Подтверждено" },
   { id: "rejected", label: "Не работаем" },
-  { id: "missing", label: "Отсутствует" },
+  { id: "missing", label: "Нет в каталоге" },
   { id: "resolved", label: "Всё решено" },
 ];
 
@@ -50,17 +50,24 @@ export function MatchingTab() {
     [state.productMemory, supplier],
   );
   const rejectedVisible = rejectedMemory.filter((item) => matchesQuery([item.traits.name, item.supplier, item.traits.barcode, item.traits.kind], query));
-  const needCount = scoped.filter((row) => (state.matches[row.key] ?? EMPTY_MATCH).status === "need").length;
-  const reviewCount = scoped.filter((row) => (state.matches[row.key] ?? EMPTY_MATCH).status === "review").length;
-  const confirmedCount = scoped.filter((row) => {
-    const status = (state.matches[row.key] ?? EMPTY_MATCH).status;
-    return status === "confirmed" || status === "picked";
-  }).length;
+  const counts = useMemo(() => {
+    const tally = { need: 0, review: 0, confirmed: 0, rejected: 0, missing: 0 };
+    for (const row of scoped) {
+      const match = state.matches[row.key] ?? EMPTY_MATCH;
+      if (match.relation === "alternative") continue;
+      if (match.status === "need") tally.need += 1;
+      else if (match.status === "review") tally.review += 1;
+      else if (match.status === "confirmed" || match.status === "picked") tally.confirmed += 1;
+      else if (match.status === "rejected") tally.rejected += 1;
+      else if (match.status === "missing") tally.missing += 1;
+    }
+    return tally;
+  }, [scoped, state.matches]);
   const filtered = useMemo(
     () =>
       scoped.filter((row) => {
         const match = state.matches[row.key] ?? EMPTY_MATCH;
-        if (!passesFilter(match.status, filter)) return false;
+        if (!passesFilter(match.status, filter, match.relation ?? "exact")) return false;
         return matchesQuery([row.name, ourNomenclature(match.code, catalog), row.code, row.barcode], query);
       }),
     [scoped, state.matches, filter, query, catalog],
@@ -108,15 +115,18 @@ export function MatchingTab() {
             <input
               className={controlClass}
               value={query}
-              placeholder="Поиск по названию"
+              placeholder="Название или штрихкод"
               onChange={(event) => setQuery(event.target.value)}
             />
           </Field>
         </div>
         <FilterBar value={filter} options={filters} onChange={setFilter} />
       </div>
-      <p className="text-sm text-mute">
-        {needCount} нужно решить, {reviewCount} на проверке, {confirmedCount} подтверждено, {rejectedMemory.length} не работаем
+      <p className="text-sm text-ink">
+        {scoped.length} {plural(scoped.length, "позиция", "позиции", "позиций")}
+        <span className="mt-1 block text-mute">
+          Подтверждено: {counts.confirmed}. На проверке: {counts.review}. Нужно решить: {counts.need}. Не работаем: {counts.rejected}. Нет в каталоге: {counts.missing}.
+        </span>
       </p>
       {state.catalog.length === 0 ? (
         <Hint>Загрузите номенклатуру из 1С на вкладке «Сегодня», чтобы появились предложения.</Hint>
@@ -201,13 +211,19 @@ export function MatchingTab() {
                 const match = state.matches[row.key] ?? EMPTY_MATCH;
                 const item = match.code ? catalog.get(match.code) : undefined;
                 const conflict = Boolean(item && unitsConflict(row.unit, item.unit));
-                const label = conflict && match.status === "need" ? "Конфликт единицы" : statusLabel(match.status);
+                const label = match.relation === "alternative"
+                  ? "Альтернатива"
+                  : match.status === "missing"
+                    ? "Нет в каталоге"
+                    : conflict && match.status === "need"
+                      ? "Конфликт единицы"
+                      : statusLabel(match.status);
                 return (
                   <tr key={row.key} className={`border-b border-black/5 ${statusRowClass(match.status, conflict)}`}>
                     <td className="break-words px-3 py-2 align-top">{row.name}</td>
                     <td className="break-words px-3 py-2 align-top">{row.supplier}</td>
                     <td className="break-words px-3 py-2 align-top">{ourNomenclature(match.code, catalog)}</td>
-                    <td className="break-words px-3 py-2 align-top">{match.confidence > 0 ? `${match.confidence}%` : "—"}</td>
+                    <td className="break-words px-3 py-2 align-top">{confidenceLabel(match.confidence)}</td>
                     <td className="break-words px-3 py-2 align-top">{match.reason || "—"}</td>
                     <td className="break-words px-3 py-2 align-top">{label}</td>
                     <td className="px-3 py-2 align-top">
@@ -231,7 +247,7 @@ export function MatchingTab() {
                         <Button variant="ghost" onClick={() => rejectMatch(row.key)}>
                           Не работаем
                         </Button>
-                        {match.status === "review" ? (
+                        {match.status === "review" && match.relation !== "alternative" ? (
                           <Button variant="ghost" onClick={() => dismissReviewMatch(row.key)}>
                             Это другой товар
                           </Button>

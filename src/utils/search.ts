@@ -11,5 +11,5 @@ export function matchesQuery(fields: string[], query: string): boolean {
 export function searchCatalog(catalog: CatalogItem[], query: string): CatalogItem[] {
   const trimmed = query.trim();
   if (trimmed.length < 3) return [];
-  return catalog.filter((item) => matchesQuery([item.name, item.unit, item.code], trimmed)).slice(0, 30);
+  return catalog.filter((item) => matchesQuery([item.name, item.unit, item.code, item.barcode ?? ""], trimmed)).slice(0, 30);
 }

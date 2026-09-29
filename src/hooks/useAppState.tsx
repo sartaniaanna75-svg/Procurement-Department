@@ -1,11 +1,10 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { AppState, CatalogItem, ColumnMapper, SupplierCard, Upload } from "../types";
 import { absentKey, todayISO } from "../utils/format";
-import { applyAutoMatch, buildCatalogIndex, dismissReview, suggestMatch } from "../utils/matching";
-import { rejectProduct, releaseProduct, saveKnownMatch } from "../utils/productMemory";
+import { applyAutoMatch, dismissReview, MATCH_LOGIC } from "../utils/matching";
+import { rejectProduct, releaseProduct, saveAlternative, saveAbsent, saveKnownMatch } from "../utils/productMemory";
 import { acceptCurrentPrice, setPurchaseNeed, upsertSupplier, type AcceptedPrice } from "../utils/procurement";
 import { loadPersistedState, savePersistedState } from "../utils/persist";
-import { listRows } from "../utils/rows";
 import { emptyState } from "../utils/storage";
 import { createSupplier } from "../utils/suppliers";
 import { supplierKey } from "../utils/text";
@@ -53,7 +52,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       .then((loaded) => {
         if (!active) return;
         const next =
-          loaded.uploads.length > 0 && loaded.catalog.length > 0 && Object.keys(loaded.matches).length === 0
+          loaded.uploads.length > 0 && loaded.catalog.length > 0 && loaded.matchLogic < MATCH_LOGIC
             ? applyAutoMatch(loaded)
             : loaded;
         setState(next);
@@ -156,7 +155,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   }, [applyPrice]);
 
   const commitCatalog = useCallback((items: CatalogItem[]) => {
-    setState((prev) => applyAutoMatch({ ...prev, catalog: items }));
+    setState((prev) => applyAutoMatch({ ...prev, catalog: items }, { reconsiderAbsent: true }));
   }, []);
 
   const confirmMatch = useCallback((key: string) => {
@@ -168,41 +167,29 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const offerAlternative = useCallback((key: string) => {
-    const row = listRows(state.uploads).find((item) => item.key === key);
-    if (!row) return;
     const current = state.matches[key];
-    const next = suggestMatch(row, buildCatalogIndex(state.catalog), current?.code || undefined);
-    if (!next.code || next.code === current?.code) {
-      setNotice({ tone: "warn", text: "Другого похожего товара нет" });
+    if (!current?.code) {
+      setNotice({ tone: "warn", text: "Сначала выберите нашу номенклатуру." });
       return;
     }
-    setNotice({ tone: "ok", text: "Предложен другой товар" });
-    setState((prev) => {
-      const cleared = { ...prev.cleared };
-      delete cleared[key];
-      return {
-        ...prev,
-        cleared,
-        matches: { ...prev.matches, [key]: { ...next, status: "need" } },
-      };
-    });
+    setNotice({ tone: "ok", text: "Позиция зафиксирована как альтернатива, не как точное сопоставление." });
+    setState((prev) => saveAlternative(prev, key, current.code));
   }, [state]);
 
   const pickMatch = useCallback((key: string, code: string) => {
-    setNotice(null);
-    setState((prev) => saveKnownMatch(prev, key, { status: "picked", code, confidence: 100, reason: "выбрано вручную" }));
+    setNotice({ tone: "ok", text: "Позиция выбрана. Нажмите «Да», чтобы подтвердить сопоставление." });
+    setState((prev) => ({
+      ...prev,
+      matches: {
+        ...prev.matches,
+        [key]: { status: "need", code, confidence: 100, reason: "выбрано вручную", relation: "exact" },
+      },
+    }));
   }, []);
 
   const markMissing = useCallback((key: string) => {
     setNotice(null);
-    setState((prev) => ({
-      ...prev,
-      cleared: { ...prev.cleared, [key]: true },
-      matches: {
-        ...prev.matches,
-        [key]: { status: "missing", code: "", confidence: 0, reason: "" },
-      },
-    }));
+    setState((prev) => saveAbsent(prev, key));
   }, []);
 
   const rejectMatch = useCallback((key: string) => {

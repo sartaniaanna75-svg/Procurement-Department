@@ -33,14 +33,21 @@ export function plural(count: number, one: string, few: string, many: string): s
   return many;
 }
 
-export function passesFilter(status: MatchStatus, filter: PriceFilter | MatchFilter): boolean {
+export function passesFilter(status: MatchStatus, filter: PriceFilter | MatchFilter, relation: "exact" | "alternative" = "exact"): boolean {
   if (filter === "all") return true;
-  if (filter === "resolved") return status === "confirmed" || status === "picked" || status === "missing";
+  if (filter === "resolved") return status === "confirmed" || status === "picked" || status === "missing" || status === "rejected" || relation === "alternative";
   if (filter === "confirmed") return status === "confirmed" || status === "picked";
   if (filter === "missing") return status === "missing";
   if (filter === "rejected") return status === "rejected";
-  if (filter === "review") return status === "review";
+  if (filter === "review") return status === "review" && relation !== "alternative";
   return status === "need";
+}
+
+export function confidenceLabel(confidence: number): string {
+  if (confidence >= 90) return "Высокая";
+  if (confidence >= 70) return "Средняя";
+  if (confidence > 0) return "Низкая";
+  return "—";
 }
 
 export function statusLabel(status: MatchStatus): string {

@@ -140,6 +140,8 @@ export interface CatalogItem {
   code: string;
   name: string;
   unit: string;
+  /** Штрихкод нашей номенклатуры, если он есть в каталоге. */
+  barcode?: string;
 }
 
 export interface ColumnMapper {
@@ -162,6 +164,8 @@ export interface MatchDecision {
   code: string;
   confidence: number;
   reason: string;
+  /** Альтернатива не считается точным сопоставлением и не уходит в заказ как подтверждённая. */
+  relation?: "exact" | "alternative";
 }
 
 /** Устойчивые признаки товара поставщика. Код поставщика сюда не входит. */
@@ -176,6 +180,8 @@ export interface ProductTraits {
   g: number;
   pack: string;
   unit: string;
+  /** Служебный признак. Сам по себе товар не подтверждает. */
+  supplierCode: string;
 }
 
 /** Постоянное решение по товару поставщика. Не зависит от актуального прайса. */
@@ -183,7 +189,7 @@ export interface ProductMemory {
   id: string;
   supplierId: string;
   supplier: string;
-  verdict: "rejected" | "matched";
+  verdict: "rejected" | "matched" | "absent" | "alternative";
   catalogCode: string;
   matchStatus: "confirmed" | "picked" | "";
   reason: string;
@@ -210,6 +216,8 @@ export interface AppState {
   cleared: Record<string, boolean>;
   seen: Record<string, number>;
   seenReady: boolean;
+  /** Версия правил сопоставления. Старые предложения пересчитываются один раз, решения в памяти сохраняются. */
+  matchLogic: number;
   suppliers: SupplierCard[];
   notInPrice: Record<string, NotInPriceItem[]>;
   priceHistory: Record<string, PricePoint[]>;

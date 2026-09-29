@@ -79,6 +79,7 @@ async function readDatabase(): Promise<AppState | null> {
       cleared: matching?.cleared ?? {},
       seen: matching?.seen ?? {},
       seenReady: matching?.seenReady ?? false,
+      matchLogic: matching?.matchLogic ?? 0,
       suppliers: suppliers?.suppliers ?? [],
       mappers: suppliers?.mappers ?? {},
       purchaseNeed: suppliers?.purchaseNeed ?? {},
@@ -114,6 +115,7 @@ async function writeDatabase(state: AppState): Promise<void> {
         cleared: state.cleared,
         seen: state.seen,
         seenReady: state.seenReady,
+        matchLogic: state.matchLogic,
       },
       "decisions",
     );
