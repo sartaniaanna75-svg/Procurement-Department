@@ -207,6 +207,9 @@ export interface AppState {
   uploads: Upload[];
   heldPrices: Upload[];
   catalog: CatalogItem[];
+  /** Одна предыдущая версия каталога. История файлов не хранится. */
+  previousCatalog: CatalogItem[];
+  catalogUpdatedAt: string;
   mappers: Record<string, ColumnMapper>;
   matches: Record<string, MatchDecision>;
   productMemory: Record<string, ProductMemory>;

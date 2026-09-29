@@ -9,6 +9,8 @@ export function emptyState(): AppState {
     uploads: [],
     heldPrices: [],
     catalog: [],
+    previousCatalog: [],
+    catalogUpdatedAt: "",
     mappers: {},
     matches: {},
     productMemory: {},
@@ -390,6 +392,10 @@ export function normalizeState(value: unknown): AppState {
     catalog: Array.isArray(value.catalog)
       ? value.catalog.map(normalizeCatalogItem).filter((item): item is CatalogItem => item !== null)
       : [],
+    previousCatalog: Array.isArray(value.previousCatalog)
+      ? value.previousCatalog.map(normalizeCatalogItem).filter((item): item is CatalogItem => item !== null)
+      : [],
+    catalogUpdatedAt: String(value.catalogUpdatedAt ?? ""),
     mappers: mapValues(value.mappers, normalizeMapper),
     matches: mapValues(value.matches, normalizeMatch),
     productMemory: mapValues(value.productMemory, normalizeMemory),

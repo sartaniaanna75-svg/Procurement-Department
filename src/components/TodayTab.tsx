@@ -1,9 +1,9 @@
 import { useRef, useState } from "react";
 import { useAppState } from "../hooks/useAppState";
 import type { SupplierCard } from "../types";
-import { plural } from "../utils/format";
-import { parseCatalog } from "../utils/mapping";
-import { PRICE_ACCEPT, TABLE_ACCEPT, loadPriceFiles, readMatrix, type LoadedPriceFile } from "../utils/parseFile";
+import { CATALOG_FILE_REJECTED, inspectCatalog, type CatalogPreview } from "../utils/catalogUpdate";
+import { formatDate, plural } from "../utils/format";
+import { PRICE_ACCEPT, TABLE_ACCEPT, loadPriceFiles, readCatalogMatrix, type LoadedPriceFile } from "../utils/parseFile";
 import type { AcceptedPrice } from "../utils/procurement";
 import { acceptPriceColumn, normalizeLoadedPrice, type NormalizedPriceDocument } from "../utils/priceSkill";
 import { collectSignals, createSupplier, detectSupplier, type SupplierSignals } from "../utils/suppliers";
@@ -32,7 +32,7 @@ interface SavedPrice {
 }
 
 export function TodayTab() {
-  const { state, acceptSupplierPrices, correctSupplierPrice, commitCatalog } = useAppState();
+  const { state, analyzing, acceptSupplierPrices, correctSupplierPrice, commitCatalog, restorePreviousCatalog } = useAppState();
   const [formOpen, setFormOpen] = useState(true);
   const [file, setFile] = useState<File | null>(null);
   const [report, setReport] = useState<PriceReport | null>(null);
@@ -142,20 +142,39 @@ export function TodayTab() {
     publish(card.id, pending.loaded, pending.signals, false, card);
   }
 
+  const [catalogPreview, setCatalogPreview] = useState<CatalogPreview | null>(null);
+  const [catalogRiskAccepted, setCatalogRiskAccepted] = useState(false);
+  const [restoreOpen, setRestoreOpen] = useState(false);
+
   async function readCatalog(nextFile: File) {
     setError(null);
     setInfo(null);
+    setCatalogPreview(null);
+    setCatalogRiskAccepted(false);
     setBusy("catalog");
     try {
-      const matrix = await readMatrix(nextFile);
-      const items = parseCatalog(matrix);
-      commitCatalog(items);
-      setInfo(`Каталог обновлён: ${items.length} ${plural(items.length, "товар", "товара", "товаров")}. Сопоставления пересчитаны, ручные решения сохранены.`);
+      const matrix = await readCatalogMatrix(nextFile);
+      const inspection = inspectCatalog(matrix, state.catalog);
+      if (!inspection.ok) {
+        setError(inspection.reason || CATALOG_FILE_REJECTED);
+        return;
+      }
+      setCatalogPreview(inspection.preview);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Не удалось прочитать каталог");
     } finally {
       setBusy(null);
     }
+  }
+
+  function confirmCatalog() {
+    if (!catalogPreview) return;
+    if (catalogPreview.shrink === "severe" && !catalogRiskAccepted) return;
+    const count = catalogPreview.found;
+    commitCatalog(catalogPreview.items);
+    setCatalogPreview(null);
+    setCatalogRiskAccepted(false);
+    setInfo(`Каталог обновлён: ${count} ${plural(count, "товар", "товара", "товаров")}. Прежние решения по товарам поставщиков сохранены.`);
   }
 
   const catalogCount = state.catalog.length;
@@ -308,17 +327,63 @@ export function TodayTab() {
       </Card>
 
       <Card title="Каталог товаров">
-        <p className="mb-3 text-sm font-medium">
-          {catalogCount > 0
-            ? `В каталоге ${catalogCount} ${plural(catalogCount, "товар", "товара", "товаров")}`
-            : "Каталог ещё не загружен"}
-        </p>
-        <Hint>Список товаров из 1С. Его загружают один раз, сопоставления остаются.</Hint>
-        <div className="mt-3">
-          <Button variant="secondary" disabled={busy !== null} onClick={() => document.getElementById("catalog-file")?.click()}>
-            {busy === "catalog" ? "Читаем каталог…" : catalogCount === 0 ? "Загрузить номенклатуру из 1С" : "Обновить номенклатуру из 1С"}
-          </Button>
+        <div className="space-y-1 text-sm">
+          <p className="font-medium">Каталог: {catalogCount} {plural(catalogCount, "товар", "товара", "товаров")}</p>
+          <p>Со штрихкодом: {state.catalog.filter((item) => item.barcode).length}</p>
+          <p>Без штрихкода: {state.catalog.filter((item) => !item.barcode).length}</p>
+          <p>Последнее обновление: {state.catalogUpdatedAt ? formatDate(state.catalogUpdatedAt) : "ещё не было"}</p>
         </div>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <Button variant="secondary" disabled={busy !== null || analyzing} onClick={() => document.getElementById("catalog-file")?.click()}>
+            {busy === "catalog" ? "Читаем каталог…" : "Обновить номенклатуру из 1С"}
+          </Button>
+          {state.previousCatalog.length > 0 ? (
+            <Button variant="secondary" disabled={busy !== null || analyzing} onClick={() => setRestoreOpen(true)}>
+              Вернуть предыдущую версию
+            </Button>
+          ) : null}
+        </div>
+        {analyzing ? <p className="mt-3 text-sm text-mute">Анализируем номенклатуру...</p> : null}
+        {catalogPreview ? (
+          <div className="mt-4 space-y-3 rounded-lg border border-slate-200 bg-white p-3 text-sm">
+            <p className="font-medium">Текущий каталог: {catalogCount} {plural(catalogCount, "товар", "товара", "товаров")}</p>
+            <div>
+              <p>В новом файле:</p>
+              <p>— найдено товаров: {catalogPreview.found}</p>
+              <p>— со штрихкодом: {catalogPreview.withBarcode}</p>
+              <p>— без штрихкода: {catalogPreview.withoutBarcode}</p>
+              <p>— новых товаров: {catalogPreview.added}</p>
+              <p>— изменившихся товаров: {catalogPreview.changed}</p>
+              <p>— не найдено в новой выгрузке: {catalogPreview.removed}</p>
+            </div>
+            <p className="text-mute">
+              Колонка наименования: «{catalogPreview.nameHeader}». Колонка штрихкода: «{catalogPreview.barcodeHeader}».
+              {catalogPreview.codeHeader ? ` Колонка кода: «${catalogPreview.codeHeader}».` : ""} Строка заголовков: {catalogPreview.headerRow}. Прочитано строк: {catalogPreview.dataRows}. Отброшено: {catalogPreview.skipped}.
+            </p>
+            {catalogPreview.shrink !== "none" ? (
+              <div className="rounded-lg border border-[#F0D5D5] bg-[#FDF4F4] p-3 font-medium text-[#9F2D2D]">
+                <p>Внимание.</p>
+                <p>Сейчас в каталоге {catalogCount} {plural(catalogCount, "товар", "товара", "товаров")}.</p>
+                <p>В новом файле найдено только {catalogPreview.found} {plural(catalogPreview.found, "товар", "товара", "товаров")}.</p>
+                <p>Возможно, выбран неправильный файл.</p>
+              </div>
+            ) : null}
+            {catalogPreview.shrink === "severe" ? (
+              <label className="flex items-start gap-2 text-sm">
+                <input type="checkbox" className="mt-1" checked={catalogRiskAccepted} onChange={(event) => setCatalogRiskAccepted(event.target.checked)} />
+                <span>Подтверждаю замену каталога, хотя товаров станет намного меньше.</span>
+              </label>
+            ) : null}
+            <div className="flex flex-wrap gap-2">
+              <Button disabled={catalogPreview.shrink === "severe" && !catalogRiskAccepted} onClick={confirmCatalog}>
+                Подтвердить обновление
+              </Button>
+              <Button variant="secondary" onClick={() => { setCatalogPreview(null); setCatalogRiskAccepted(false); }}>
+                Отменить
+              </Button>
+            </div>
+          </div>
+        ) : null}
         <input
           id="catalog-file"
           className="hidden"
@@ -331,6 +396,19 @@ export function TodayTab() {
           }}
         />
       </Card>
+      {restoreOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 px-4">
+          <div className="max-w-lg rounded-[10px] bg-white p-5 shadow-card">
+            <p className="whitespace-pre-line text-sm text-ink">
+              {`Текущий каталог: ${catalogCount} ${plural(catalogCount, "товар", "товара", "товаров")}.\nПредыдущая версия: ${state.previousCatalog.length} ${plural(state.previousCatalog.length, "товар", "товара", "товаров")}.\nВернуть предыдущую версию?`}
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <Button variant="secondary" onClick={() => setRestoreOpen(false)}>Отмена</Button>
+              <Button onClick={() => { setRestoreOpen(false); setCatalogPreview(null); restorePreviousCatalog(); }}>Вернуть предыдущую версию</Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {error ? <p className="text-sm text-danger">{error}</p> : null}
       {info ? <p className="text-sm text-ok">{info}</p> : null}

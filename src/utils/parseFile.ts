@@ -229,3 +229,51 @@ export async function readMatrix(file: File): Promise<string[][]> {
   const sheets = await readSheets(file);
   return sheets[0].matrix;
 }
+
+function catalogCell(cell: XLSX.CellObject | undefined): string {
+  if (!cell || cell.v === undefined || cell.v === null) return "";
+  if (cell.t === "s") return String(cell.v).trim();
+  if (cell.t === "n" && typeof cell.v === "number") {
+    if (!Number.isFinite(cell.v) || cell.v === 0) return "";
+    if (Number.isSafeInteger(cell.v)) return String(cell.v);
+    const formatted = String(cell.w ?? "").trim();
+    return formatted;
+  }
+  if (cell.t === "b" || cell.t === "d") return "";
+  return String(cell.w ?? cell.v).trim();
+}
+
+function matrixFromCatalogSheet(sheet: XLSX.WorkSheet): string[][] {
+  const ref = sheet["!ref"];
+  if (!ref) return [];
+  const range = XLSX.utils.decode_range(ref);
+  const matrix: string[][] = [];
+  for (let rowIndex = range.s.r; rowIndex <= range.e.r; rowIndex += 1) {
+    const row: string[] = [];
+    let filled = false;
+    for (let columnIndex = range.s.c; columnIndex <= range.e.c; columnIndex += 1) {
+      const text = catalogCell(sheet[XLSX.utils.encode_cell({ r: rowIndex, c: columnIndex })]);
+      if (text) filled = true;
+      row.push(text);
+    }
+    if (filled) matrix.push(row);
+  }
+  return matrix;
+}
+
+/** Чтение нашей номенклатуры: штрихкод остаётся строкой, без научной записи и округления. */
+export async function readCatalogMatrix(file: File): Promise<string[][]> {
+  if (file.size > MAX_FILE_BYTES) {
+    throw new Error("Файл больше 15 МБ. Разбейте выгрузку на части.");
+  }
+  const lower = file.name.toLowerCase();
+  if (lower.endsWith(".csv") || lower.endsWith(".txt") || lower.endsWith(".html") || lower.endsWith(".htm")) {
+    return readMatrix(file);
+  }
+  const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
+  if (workbook.SheetNames.length === 0) throw new Error("В книге нет листов");
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const matrix = sheet ? matrixFromCatalogSheet(sheet) : [];
+  if (matrix.length === 0) throw new Error("Файл пустой или его формат не распознан");
+  return matrix;
+}

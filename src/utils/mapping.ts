@@ -1,4 +1,5 @@
 import type { CatalogItem, ColumnLabels, ColumnMapper, PriceTuple } from "../types";
+import { readCatalogItems } from "./catalogUpdate";
 import { parsePrice } from "./parseFile";
 import { matchKey } from "./rows";
 import { normalizeText } from "./text";
@@ -201,54 +202,10 @@ export function columnChoicesOverlap(mapper: ColumnMapper): boolean {
   return new Set(indexes).size !== indexes.length;
 }
 
-function catalogColumns(headers: string[]): { code: number; name: number; unit: number; barcode: number } | null {
-  const found: Partial<Record<"code" | "name" | "unit" | "barcode", number>> = {};
-  headers.forEach((header, index) => {
-    const value = normalizeText(header);
-    if (!value) return;
-    if (found.barcode === undefined && /штрих|barcode|ean|gtin/.test(value)) found.barcode = index;
-    else if (found.code === undefined && /артикул|код|code|sku/.test(value) && !/постав/.test(value) && !/штрих|barcode|ean|gtin/.test(value)) found.code = index;
-    else if (found.name === undefined && /наимен|назван|номенклат|товар|name/.test(value)) found.name = index;
-    else if (found.unit === undefined && /единиц|ед\.?\s*изм|^ед\.?$|unit/.test(value)) found.unit = index;
-  });
-  if (found.code === undefined && found.barcode !== undefined) found.code = found.barcode;
-  if (found.code === undefined || found.name === undefined) return null;
-  return { code: found.code, name: found.name, unit: found.unit ?? -1, barcode: found.barcode ?? -1 };
-}
-
-function plainBarcode(value: string): string {
-  const trimmed = value.replace(/[\s.\-–—]/g, "");
-  return /^\d{8}$|^\d{12,14}$/.test(trimmed) ? trimmed : "";
-}
-
 export function parseCatalog(matrix: string[][]): CatalogItem[] {
-  let headerIndex = -1;
-  let columns: { code: number; name: number; unit: number; barcode: number } | null = null;
-  const scanLimit = Math.min(matrix.length, 10);
-  for (let index = 0; index < scanLimit; index += 1) {
-    const detected = catalogColumns(matrix[index] ?? []);
-    if (detected) {
-      headerIndex = index;
-      columns = detected;
-      break;
-    }
-  }
-  const cols = columns ?? { code: 0, name: 1, unit: 2, barcode: -1 };
-  const start = headerIndex >= 0 ? headerIndex + 1 : 0;
-  const items = new Map<string, CatalogItem>();
-  for (let index = start; index < matrix.length; index += 1) {
-    const row = matrix[index] ?? [];
-    const code = cell(row, cols.code);
-    const name = cell(row, cols.name);
-    if (!code || !name) continue;
-    if (headerIndex < 0 && index === 0 && /код|назван/i.test(`${code} ${name}`)) continue;
-    const explicit = cols.barcode >= 0 && cols.barcode !== cols.code ? plainBarcode(cell(row, cols.barcode).replace(/\s/g, "")) : "";
-    items.set(code, { code, name, unit: cell(row, cols.unit), barcode: explicit || plainBarcode(code) });
-  }
-  if (items.size === 0) {
-    throw new Error("В файле каталога не найдены товары. Нужны колонки: Код, Название, Единица.");
-  }
-  return [...items.values()];
+  const read = readCatalogItems(matrix);
+  if (!read.ok) throw new Error(read.reason);
+  return read.items;
 }
 
 export function priceSample(matrix: string[][], headerRow: number, priceCol: number): { ok: number; total: number } {

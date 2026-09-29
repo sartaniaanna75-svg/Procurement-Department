@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { AppState, CatalogItem, ColumnMapper, SupplierCard, Upload } from "../types";
 import { absentKey, todayISO } from "../utils/format";
+import { alignCatalog } from "../utils/catalogUpdate";
 import { applyAutoMatch, dismissReview, MATCH_LOGIC, reopenSkipped, skipMatches } from "../utils/matching";
 import { rejectProduct, rejectProducts, releaseProduct, saveAbsents, saveAbsent, saveAlternative, saveKnownMatch } from "../utils/productMemory";
 import { acceptCurrentPrice, setPurchaseNeed, upsertSupplier, type AcceptedPrice } from "../utils/procurement";
@@ -27,6 +28,7 @@ interface AppApi {
   acceptSupplierPrices: (inputs: AcceptedPrice[], card?: SupplierCard) => { ok: boolean; reason: string };
   correctSupplierPrice: (inputs: AcceptedPrice[], card?: SupplierCard) => { ok: boolean; reason: string };
   commitCatalog: (items: CatalogItem[]) => void;
+  restorePreviousCatalog: () => void;
   confirmMatch: (key: string) => void;
   offerAlternative: (key: string) => void;
   pickMatch: (key: string, code: string) => void;
@@ -169,7 +171,35 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   }, [applyPrice]);
 
   const commitCatalog = useCallback((items: CatalogItem[]) => {
-    setState((prev) => applyAutoMatch({ ...prev, catalog: items }, { reconsiderAbsent: true }));
+    setAnalyzing(true);
+    window.setTimeout(() => {
+      setState((prev) => {
+        const catalog = alignCatalog(prev.catalog, items);
+        return applyAutoMatch({
+          ...prev,
+          catalog,
+          previousCatalog: prev.catalog.length > 0 ? prev.catalog : prev.previousCatalog,
+          catalogUpdatedAt: new Date().toISOString(),
+        });
+      });
+      setAnalyzing(false);
+    }, 0);
+  }, []);
+
+  const restorePreviousCatalog = useCallback(() => {
+    setAnalyzing(true);
+    window.setTimeout(() => {
+      setState((prev) => {
+        if (prev.previousCatalog.length === 0) return prev;
+        return applyAutoMatch({
+          ...prev,
+          catalog: prev.previousCatalog,
+          previousCatalog: prev.catalog,
+          catalogUpdatedAt: new Date().toISOString(),
+        });
+      });
+      setAnalyzing(false);
+    }, 0);
   }, []);
 
   const confirmMatch = useCallback((key: string) => {
@@ -280,6 +310,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       acceptSupplierPrices,
       correctSupplierPrice,
       commitCatalog,
+      restorePreviousCatalog,
       confirmMatch,
       offerAlternative,
       pickMatch,
@@ -307,6 +338,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       acceptSupplierPrices,
       correctSupplierPrice,
       commitCatalog,
+      restorePreviousCatalog,
       confirmMatch,
       offerAlternative,
       pickMatch,

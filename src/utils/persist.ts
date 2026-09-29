@@ -54,11 +54,15 @@ async function readDatabase(): Promise<AppState | null> {
   try {
     const transaction = db.transaction([...STORE_NAMES], "readonly");
     const catalogRequest = transaction.objectStore("catalog").get("items");
+    const previousRequest = transaction.objectStore("catalog").get("previous");
+    const metaRequest = transaction.objectStore("catalog").get("meta");
     const pricesRequest = transaction.objectStore("prices").get("current");
     const matchingRequest = transaction.objectStore("matching").get("decisions");
     const suppliersRequest = transaction.objectStore("suppliers").get("cards");
     const documentsRequest = transaction.objectStore("documents").get("orders");
     const catalog = await requestResult(catalogRequest);
+    const previousCatalog = await requestResult(previousRequest);
+    const meta = await requestResult<{ catalogUpdatedAt?: string } | undefined>(metaRequest);
     const prices = await requestResult<Record<string, unknown> | undefined>(pricesRequest);
     const matching = await requestResult<Record<string, unknown> | undefined>(matchingRequest);
     const suppliers = await requestResult<Record<string, unknown> | undefined>(suppliersRequest);
@@ -67,6 +71,8 @@ async function readDatabase(): Promise<AppState | null> {
     if (catalog === undefined && !prices && !matching && !suppliers && !documents) return null;
     return normalizeState({
       catalog: catalog ?? [],
+      previousCatalog: previousCatalog ?? [],
+      catalogUpdatedAt: meta?.catalogUpdatedAt ?? "",
       uploads: prices?.uploads ?? [],
       heldPrices: prices?.heldPrices ?? [],
       notInPrice: prices?.notInPrice ?? {},
@@ -96,6 +102,8 @@ async function writeDatabase(state: AppState): Promise<void> {
   try {
     const transaction = db.transaction([...STORE_NAMES], "readwrite");
     transaction.objectStore("catalog").put(state.catalog, "items");
+    transaction.objectStore("catalog").put(state.previousCatalog, "previous");
+    transaction.objectStore("catalog").put({ catalogUpdatedAt: state.catalogUpdatedAt }, "meta");
     transaction.objectStore("prices").put(
       {
         uploads: state.uploads,
