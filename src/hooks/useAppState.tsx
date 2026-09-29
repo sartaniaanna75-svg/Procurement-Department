@@ -2,10 +2,20 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import type { AppState, ColumnMapper, SupplierCard, Upload } from "../types";
 import { absentKey, todayISO } from "../utils/format";
 import { mergeCatalog, reconcileMatchesAfterCatalog, summarizeUpdate, type CatalogPreview } from "../utils/catalogUpdate";
+import { DEFAULT_DIVISION, divisionLabel, emptyDivisionConnections, type DivisionId } from "../utils/divisions";
 import { applyAutoMatch, dismissReview, MATCH_LOGIC, reopenSkipped, skipMatches } from "../utils/matching";
 import { rejectProduct, rejectProducts, releaseProduct, saveAbsents, saveAbsent, saveAlternative, saveKnownMatch } from "../utils/productMemory";
 import { acceptCurrentPrice, setPurchaseNeed, upsertSupplier, type AcceptedPrice } from "../utils/procurement";
-import { keepSupplierPriceIslands, loadPersistedState, savePersistedState } from "../utils/persist";
+import {
+  keepSupplierPriceIslands,
+  loadDivisionConnections,
+  loadDivisionState,
+  loadPersistedState,
+  readActiveDivision,
+  rememberActiveDivision,
+  saveDivisionConnections,
+  savePersistedState,
+} from "../utils/persist";
 import { emptyState } from "../utils/storage";
 import { createSupplier } from "../utils/suppliers";
 import { supplierKey } from "../utils/text";
@@ -17,6 +27,9 @@ interface Notice {
 
 interface AppApi {
   state: AppState;
+  activeDivision: DivisionId;
+  activeDivisionLabel: string;
+  setActiveDivision: (division: DivisionId) => void;
   analyzing: boolean;
   saveError: string | null;
   notice: Notice | null;
@@ -48,18 +61,37 @@ interface AppApi {
 const AppStateContext = createContext<AppApi | null>(null);
 
 export function AppStateProvider({ children }: { children: ReactNode }) {
+  const [activeDivision, setActiveDivisionState] = useState<DivisionId>(DEFAULT_DIVISION);
   const [state, setState] = useState<AppState>(emptyState);
   const [hydrated, setHydrated] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
+  const [switching, setSwitching] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const undoPrice = useRef<AppState | null>(null);
+  const activeDivisionRef = useRef<DivisionId>(DEFAULT_DIVISION);
+  const stateRef = useRef<AppState>(state);
+  activeDivisionRef.current = activeDivision;
+  stateRef.current = state;
 
   useEffect(() => {
     let active = true;
-    loadPersistedState()
-      .then((loaded) => {
+    const division = readActiveDivision();
+    loadPersistedState(division)
+      .then(async (loaded) => {
         if (!active) return;
+        try {
+          const connections = await loadDivisionConnections(division);
+          await saveDivisionConnections(division, connections);
+          if (division !== "territory") {
+            await saveDivisionConnections("territory", emptyDivisionConnections());
+          }
+        } catch {
+          /* заготовки подключений не блокируют работу */
+        }
+        if (!active) return;
+        setActiveDivisionState(division);
+        activeDivisionRef.current = division;
         const needsMatch = loaded.uploads.length > 0 && loaded.catalog.length > 0 && loaded.matchLogic < MATCH_LOGIC;
         if (!needsMatch) {
           setState(loaded);
@@ -85,15 +117,52 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (!hydrated || analyzing) return;
+    if (!hydrated || analyzing || switching) return;
     let active = true;
-    savePersistedState(state).then((error) => {
+    const division = activeDivisionRef.current;
+    savePersistedState(state, division).then((error) => {
       if (active) setSaveError(error);
     });
     return () => {
       active = false;
     };
-  }, [state, hydrated, analyzing]);
+  }, [state, hydrated, analyzing, switching, activeDivision]);
+
+  const setActiveDivision = useCallback((next: DivisionId) => {
+    if (next === activeDivisionRef.current) return;
+    setSwitching(true);
+    setAnalyzing(true);
+    const current = activeDivisionRef.current;
+    const snapshot = stateRef.current;
+    void (async () => {
+      try {
+        await savePersistedState(snapshot, current);
+        const loaded = await loadDivisionState(next);
+        undoPrice.current = null;
+        setNotice(null);
+        rememberActiveDivision(next);
+        activeDivisionRef.current = next;
+        setActiveDivisionState(next);
+        const needsMatch = loaded.uploads.length > 0 && loaded.catalog.length > 0 && loaded.matchLogic < MATCH_LOGIC;
+        if (needsMatch) {
+          setState(loaded);
+          window.setTimeout(() => {
+            setState(applyAutoMatch(loaded));
+            setAnalyzing(false);
+            setSwitching(false);
+          }, 0);
+          return;
+        }
+        setState(loaded);
+        setAnalyzing(false);
+        setSwitching(false);
+      } catch {
+        setSaveError("Не удалось переключить подразделение.");
+        setAnalyzing(false);
+        setSwitching(false);
+      }
+    })();
+  }, []);
 
   const commitPrice = useCallback((upload: Upload, mapper: ColumnMapper) => {
     setState((prev) => {
@@ -327,9 +396,14 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
 
   const clearNotice = useCallback(() => setNotice(null), []);
 
+  const activeDivisionLabel = divisionLabel(activeDivision);
+
   const api = useMemo<AppApi>(
     () => ({
       state,
+      activeDivision,
+      activeDivisionLabel,
+      setActiveDivision,
       analyzing,
       saveError,
       notice,
@@ -359,6 +433,9 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     }),
     [
       state,
+      activeDivision,
+      activeDivisionLabel,
+      setActiveDivision,
       analyzing,
       saveError,
       notice,

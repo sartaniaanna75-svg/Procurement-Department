@@ -376,13 +376,25 @@ export function procurementBoard(state: AppState, now = new Date()): Procurement
   const missing: CycleStatus[] = [];
   const expected: CycleStatus[] = [];
   const demand: CycleStatus[] = [];
+
+  /** Одно событие (поставщик + дата цикла) — ровно в одном блоке. */
+  function placeScheduleEvent(item: CycleStatus, card: SupplierCard) {
+    if (requiresPriceFile(card) && (item.freshness === "missing" || item.freshness === "stale")) {
+      missing.push(item);
+      return;
+    }
+    if (requiresPriceFile(card) && item.freshness === "expected") {
+      expected.push(item);
+      return;
+    }
+    if (item.timing === "today") today.push(item);
+    else upcoming.push(item);
+  }
+
   for (const card of state.suppliers) {
     const events = supplierEvents(state, card, now);
-    if (events.today) today.push(events.today);
-    if (events.upcoming) upcoming.push(events.upcoming);
-    const primary = events.today ?? events.upcoming;
-    if (primary && requiresPriceFile(card) && (primary.freshness === "missing" || primary.freshness === "stale")) missing.push(primary);
-    if (primary && requiresPriceFile(card) && primary.freshness === "expected") expected.push(primary);
+    if (events.today) placeScheduleEvent(events.today, card);
+    if (events.upcoming) placeScheduleEvent(events.upcoming, card);
     if (events.demand) demand.push(events.demand);
   }
   const byName = (a: CycleStatus, b: CycleStatus) => a.name.localeCompare(b.name, "ru");

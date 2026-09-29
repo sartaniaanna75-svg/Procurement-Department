@@ -1,5 +1,12 @@
 import type { AppState } from "../types";
 import { STORAGE_KEY } from "../types";
+import {
+  DEFAULT_DIVISION,
+  emptyDivisionConnections,
+  isDivisionId,
+  type DivisionConnections,
+  type DivisionId,
+} from "./divisions";
 import { emptyState, normalizeState } from "./storage";
 
 const DB_NAME = "zakazy";
@@ -18,6 +25,12 @@ interface DataSnapshot {
   rowCount: number;
   held: string;
   heldCount: number;
+}
+
+type PersistStore = (typeof STORE_NAMES)[number];
+
+function divisionKey(division: DivisionId, key: string): string {
+  return `${division}/${key}`;
 }
 
 function openDatabase(): Promise<IDBDatabase> {
@@ -49,57 +62,207 @@ function transactionDone(transaction: IDBTransaction): Promise<void> {
   });
 }
 
-async function readDatabase(): Promise<AppState | null> {
+function assembleState(parts: {
+  catalog: unknown;
+  previousCatalog: unknown;
+  meta: { catalogUpdatedAt?: string; catalogImportMeta?: AppState["catalogImportMeta"]; catalogUpdateSummary?: AppState["catalogUpdateSummary"] } | undefined;
+  prices: Record<string, unknown> | undefined;
+  matching: Record<string, unknown> | undefined;
+  suppliers: Record<string, unknown> | undefined;
+  documents: Record<string, unknown> | undefined;
+}): AppState {
+  return normalizeState({
+    catalog: parts.catalog ?? [],
+    previousCatalog: parts.previousCatalog ?? [],
+    catalogUpdatedAt: parts.meta?.catalogUpdatedAt ?? "",
+    catalogImportMeta: parts.meta?.catalogImportMeta ?? null,
+    catalogUpdateSummary: parts.meta?.catalogUpdateSummary ?? null,
+    uploads: parts.prices?.uploads ?? [],
+    heldPrices: parts.prices?.heldPrices ?? [],
+    notInPrice: parts.prices?.notInPrice ?? {},
+    priceHistory: parts.prices?.priceHistory ?? {},
+    matches: parts.matching?.matches ?? {},
+    productMemory: parts.matching?.productMemory ?? {},
+    reviewPasses: parts.matching?.reviewPasses ?? {},
+    confirmed: parts.matching?.confirmed ?? {},
+    absent: parts.matching?.absent ?? {},
+    cleared: parts.matching?.cleared ?? {},
+    seen: parts.matching?.seen ?? {},
+    seenReady: parts.matching?.seenReady ?? false,
+    matchLogic: parts.matching?.matchLogic ?? 0,
+    suppliers: parts.suppliers?.suppliers ?? [],
+    mappers: parts.suppliers?.mappers ?? {},
+    purchaseNeed: parts.suppliers?.purchaseNeed ?? {},
+    draftOrders: parts.documents?.draftOrders ?? [],
+    priceWatch: parts.documents?.priceWatch ?? [],
+  });
+}
+
+function stateLooksEmpty(state: AppState): boolean {
+  return (
+    state.catalog.length === 0 &&
+    state.uploads.length === 0 &&
+    state.suppliers.length === 0 &&
+    Object.keys(state.matches).length === 0 &&
+    Object.keys(state.productMemory).length === 0
+  );
+}
+
+async function readKeys(
+  db: IDBDatabase,
+  map: (key: string) => string,
+): Promise<{
+  catalog: unknown;
+  previousCatalog: unknown;
+  meta: { catalogUpdatedAt?: string; catalogImportMeta?: AppState["catalogImportMeta"]; catalogUpdateSummary?: AppState["catalogUpdateSummary"] } | undefined;
+  prices: Record<string, unknown> | undefined;
+  matching: Record<string, unknown> | undefined;
+  suppliers: Record<string, unknown> | undefined;
+  documents: Record<string, unknown> | undefined;
+  connections: DivisionConnections | undefined;
+  any: boolean;
+}> {
+  const transaction = db.transaction([...STORE_NAMES], "readonly");
+  const catalog = await requestResult(transaction.objectStore("catalog").get(map("items")));
+  const previousCatalog = await requestResult(transaction.objectStore("catalog").get(map("previous")));
+  const meta = await requestResult(transaction.objectStore("catalog").get(map("meta")));
+  const prices = await requestResult(transaction.objectStore("prices").get(map("current")));
+  const matching = await requestResult(transaction.objectStore("matching").get(map("decisions")));
+  const suppliers = await requestResult(transaction.objectStore("suppliers").get(map("cards")));
+  const documents = await requestResult(transaction.objectStore("documents").get(map("orders")));
+  const settings = await requestResult(transaction.objectStore("documents").get(map("settings")));
+  await transactionDone(transaction);
+  const any =
+    catalog !== undefined ||
+    previousCatalog !== undefined ||
+    meta !== undefined ||
+    Boolean(prices) ||
+    Boolean(matching) ||
+    Boolean(suppliers) ||
+    Boolean(documents) ||
+    Boolean(settings);
+  const connections =
+    settings && typeof settings === "object" && "connections" in settings
+      ? normalizeConnections((settings as { connections?: unknown }).connections)
+      : undefined;
+  return {
+    catalog,
+    previousCatalog,
+    meta: meta as { catalogUpdatedAt?: string; catalogImportMeta?: AppState["catalogImportMeta"]; catalogUpdateSummary?: AppState["catalogUpdateSummary"] } | undefined,
+    prices: prices as Record<string, unknown> | undefined,
+    matching: matching as Record<string, unknown> | undefined,
+    suppliers: suppliers as Record<string, unknown> | undefined,
+    documents: documents as Record<string, unknown> | undefined,
+    connections,
+    any,
+  };
+}
+
+function normalizeConnections(value: unknown): DivisionConnections {
+  const base = emptyDivisionConnections();
+  if (!value || typeof value !== "object") return base;
+  const raw = value as Record<string, unknown>;
+  const email = raw.emailConnection && typeof raw.emailConnection === "object" ? (raw.emailConnection as Record<string, unknown>) : {};
+  const oneC = raw.oneCConnection && typeof raw.oneCConnection === "object" ? (raw.oneCConnection as Record<string, unknown>) : {};
+  return {
+    emailConnection: {
+      configured: Boolean(email.configured),
+      label: String(email.label ?? ""),
+    },
+    oneCConnection: {
+      configured: Boolean(oneC.configured),
+      label: String(oneC.label ?? ""),
+    },
+  };
+}
+
+async function readDivisionRaw(division: DivisionId): Promise<{ state: AppState | null; connections: DivisionConnections }> {
   const db = await openDatabase();
   try {
-    const transaction = db.transaction([...STORE_NAMES], "readonly");
-    const catalogRequest = transaction.objectStore("catalog").get("items");
-    const previousRequest = transaction.objectStore("catalog").get("previous");
-    const metaRequest = transaction.objectStore("catalog").get("meta");
-    const pricesRequest = transaction.objectStore("prices").get("current");
-    const matchingRequest = transaction.objectStore("matching").get("decisions");
-    const suppliersRequest = transaction.objectStore("suppliers").get("cards");
-    const documentsRequest = transaction.objectStore("documents").get("orders");
-    const catalog = await requestResult(catalogRequest);
-    const previousCatalog = await requestResult(previousRequest);
-    const meta = await requestResult<{ catalogUpdatedAt?: string; catalogImportMeta?: AppState["catalogImportMeta"]; catalogUpdateSummary?: AppState["catalogUpdateSummary"] } | undefined>(metaRequest);
-    const prices = await requestResult<Record<string, unknown> | undefined>(pricesRequest);
-    const matching = await requestResult<Record<string, unknown> | undefined>(matchingRequest);
-    const suppliers = await requestResult<Record<string, unknown> | undefined>(suppliersRequest);
-    const documents = await requestResult<Record<string, unknown> | undefined>(documentsRequest);
-    await transactionDone(transaction);
-    if (catalog === undefined && !prices && !matching && !suppliers && !documents) return null;
-    return normalizeState({
-      catalog: catalog ?? [],
-      previousCatalog: previousCatalog ?? [],
-      catalogUpdatedAt: meta?.catalogUpdatedAt ?? "",
-      catalogImportMeta: meta?.catalogImportMeta ?? null,
-      catalogUpdateSummary: meta?.catalogUpdateSummary ?? null,
-      uploads: prices?.uploads ?? [],
-      heldPrices: prices?.heldPrices ?? [],
-      notInPrice: prices?.notInPrice ?? {},
-      priceHistory: prices?.priceHistory ?? {},
-      matches: matching?.matches ?? {},
-      productMemory: matching?.productMemory ?? {},
-      reviewPasses: matching?.reviewPasses ?? {},
-      confirmed: matching?.confirmed ?? {},
-      absent: matching?.absent ?? {},
-      cleared: matching?.cleared ?? {},
-      seen: matching?.seen ?? {},
-      seenReady: matching?.seenReady ?? false,
-      matchLogic: matching?.matchLogic ?? 0,
-      suppliers: suppliers?.suppliers ?? [],
-      mappers: suppliers?.mappers ?? {},
-      purchaseNeed: suppliers?.purchaseNeed ?? {},
-      draftOrders: documents?.draftOrders ?? [],
-      priceWatch: documents?.priceWatch ?? [],
-    });
+    const prefixed = await readKeys(db, (key) => divisionKey(division, key));
+    if (prefixed.any) {
+      return {
+        state: assembleState(prefixed),
+        connections: prefixed.connections ?? emptyDivisionConnections(),
+      };
+    }
+    // Однократная миграция: старые ключи без префикса → Володарского.
+    if (division === DEFAULT_DIVISION) {
+      const legacy = await readKeys(db, (key) => key);
+      if (legacy.any) {
+        const state = assembleState(legacy);
+        await writeDivisionState(state, DEFAULT_DIVISION, [...STORE_NAMES], emptyDivisionConnections());
+        return { state, connections: emptyDivisionConnections() };
+      }
+    }
+    return { state: null, connections: emptyDivisionConnections() };
   } finally {
     db.close();
   }
 }
 
-type PersistStore = (typeof STORE_NAMES)[number];
+async function writeDivisionState(
+  state: AppState,
+  division: DivisionId,
+  stores: PersistStore[] = [...STORE_NAMES],
+  connections?: DivisionConnections,
+): Promise<void> {
+  if (stores.length === 0 && connections === undefined) return;
+  const db = await openDatabase();
+  try {
+    const names = connections !== undefined && !stores.includes("documents") ? [...stores, "documents" as const] : stores;
+    if (names.length === 0) return;
+    const transaction = db.transaction(names, "readwrite");
+    const k = (key: string) => divisionKey(division, key);
+    if (stores.includes("catalog")) {
+      transaction.objectStore("catalog").put(state.catalog, k("items"));
+      transaction.objectStore("catalog").put(state.previousCatalog, k("previous"));
+      transaction.objectStore("catalog").put(
+        { catalogUpdatedAt: state.catalogUpdatedAt, catalogImportMeta: state.catalogImportMeta, catalogUpdateSummary: state.catalogUpdateSummary },
+        k("meta"),
+      );
+    }
+    if (stores.includes("prices")) {
+      transaction.objectStore("prices").put(
+        {
+          uploads: state.uploads,
+          heldPrices: state.heldPrices,
+          notInPrice: state.notInPrice,
+          priceHistory: state.priceHistory,
+        },
+        k("current"),
+      );
+    }
+    if (stores.includes("matching")) {
+      transaction.objectStore("matching").put(
+        {
+          matches: state.matches,
+          productMemory: state.productMemory,
+          reviewPasses: state.reviewPasses,
+          confirmed: state.confirmed,
+          absent: state.absent,
+          cleared: state.cleared,
+          seen: state.seen,
+          seenReady: state.seenReady,
+          matchLogic: state.matchLogic,
+        },
+        k("decisions"),
+      );
+    }
+    if (stores.includes("suppliers")) {
+      transaction.objectStore("suppliers").put({ suppliers: state.suppliers, mappers: state.mappers, purchaseNeed: state.purchaseNeed }, k("cards"));
+    }
+    if (stores.includes("documents")) {
+      transaction.objectStore("documents").put({ draftOrders: state.draftOrders, priceWatch: state.priceWatch }, k("orders"));
+    }
+    if (connections !== undefined) {
+      transaction.objectStore("documents").put({ connections }, k("settings"));
+    }
+    await transactionDone(transaction);
+  } finally {
+    db.close();
+  }
+}
 
 /** Отпечатки независимых блоков данных: каталог ≠ прайсы ≠ поставщики. */
 export function persistStoreFingerprints(state: AppState): Record<PersistStore, string> {
@@ -190,58 +353,6 @@ export function keepSupplierPriceIslands(from: AppState, to: AppState): AppState
   };
 }
 
-async function writeDatabase(state: AppState, stores: PersistStore[] = [...STORE_NAMES]): Promise<void> {
-  if (stores.length === 0) return;
-  const db = await openDatabase();
-  try {
-    const transaction = db.transaction(stores, "readwrite");
-    if (stores.includes("catalog")) {
-      transaction.objectStore("catalog").put(state.catalog, "items");
-      transaction.objectStore("catalog").put(state.previousCatalog, "previous");
-      transaction.objectStore("catalog").put(
-        { catalogUpdatedAt: state.catalogUpdatedAt, catalogImportMeta: state.catalogImportMeta, catalogUpdateSummary: state.catalogUpdateSummary },
-        "meta",
-      );
-    }
-    if (stores.includes("prices")) {
-      transaction.objectStore("prices").put(
-        {
-          uploads: state.uploads,
-          heldPrices: state.heldPrices,
-          notInPrice: state.notInPrice,
-          priceHistory: state.priceHistory,
-        },
-        "current",
-      );
-    }
-    if (stores.includes("matching")) {
-      transaction.objectStore("matching").put(
-        {
-          matches: state.matches,
-          productMemory: state.productMemory,
-          reviewPasses: state.reviewPasses,
-          confirmed: state.confirmed,
-          absent: state.absent,
-          cleared: state.cleared,
-          seen: state.seen,
-          seenReady: state.seenReady,
-          matchLogic: state.matchLogic,
-        },
-        "decisions",
-      );
-    }
-    if (stores.includes("suppliers")) {
-      transaction.objectStore("suppliers").put({ suppliers: state.suppliers, mappers: state.mappers, purchaseNeed: state.purchaseNeed }, "cards");
-    }
-    if (stores.includes("documents")) {
-      transaction.objectStore("documents").put({ draftOrders: state.draftOrders, priceWatch: state.priceWatch }, "orders");
-    }
-    await transactionDone(transaction);
-  } finally {
-    db.close();
-  }
-}
-
 async function clearDatabase(): Promise<void> {
   const db = await openDatabase();
   try {
@@ -292,8 +403,23 @@ function covers(newer: DataSnapshot, older: DataSnapshot): boolean {
   return newer.catalog >= older.catalog && newer.matches >= older.matches && newer.confirmed >= older.confirmed && newer.rowCount >= older.rowCount && newer.heldCount >= older.heldCount && newer.suppliers.length >= older.suppliers.length;
 }
 
-function rememberPlace(): void {
-  localStorage.setItem(META_KEY, JSON.stringify({ place: "indexeddb" }));
+export function readActiveDivision(): DivisionId {
+  try {
+    const raw = localStorage.getItem(META_KEY);
+    if (!raw) return DEFAULT_DIVISION;
+    const parsed = JSON.parse(raw) as { activeDivision?: unknown };
+    return isDivisionId(parsed.activeDivision) ? parsed.activeDivision : DEFAULT_DIVISION;
+  } catch {
+    return DEFAULT_DIVISION;
+  }
+}
+
+function rememberPlace(activeDivision: DivisionId = readActiveDivision()): void {
+  localStorage.setItem(META_KEY, JSON.stringify({ place: "indexeddb", activeDivision }));
+}
+
+export function rememberActiveDivision(activeDivision: DivisionId): void {
+  rememberPlace(activeDivision);
 }
 
 function removeLegacy(): void {
@@ -303,9 +429,9 @@ function removeLegacy(): void {
 
 async function migrateLegacy(legacy: AppState): Promise<AppState | null> {
   try {
-    await writeDatabase(legacy);
-    const back = await readDatabase();
-    if (!back || !sameSnapshot(legacy, back)) {
+    await writeDivisionState(legacy, DEFAULT_DIVISION, [...STORE_NAMES], emptyDivisionConnections());
+    const back = await loadDivisionState(DEFAULT_DIVISION);
+    if (!sameSnapshot(legacy, back)) {
       await clearDatabase();
       return null;
     }
@@ -316,14 +442,31 @@ async function migrateLegacy(legacy: AppState): Promise<AppState | null> {
   }
 }
 
-export async function loadPersistedState(): Promise<AppState> {
+/** Загрузить данные одного подразделения. Территория без записей → пустое состояние. */
+export async function loadDivisionState(division: DivisionId): Promise<AppState> {
+  const { state } = await readDivisionRaw(division);
+  return state ?? emptyState();
+}
+
+export async function loadDivisionConnections(division: DivisionId): Promise<DivisionConnections> {
+  const { connections } = await readDivisionRaw(division);
+  return connections;
+}
+
+/**
+ * Первичная загрузка активного подразделения.
+ * Все прежние данные мигрируют в Володарского; Территория остаётся пустой до первого сохранения.
+ */
+export async function loadPersistedState(division: DivisionId = readActiveDivision()): Promise<AppState> {
   const legacy = readLegacyState();
   let stored: AppState | null = null;
   try {
-    stored = await readDatabase();
+    const raw = await readDivisionRaw(division);
+    stored = raw.state;
   } catch {
-    return legacy ?? emptyState();
+    return legacy && division === DEFAULT_DIVISION ? legacy : emptyState();
   }
+  if (division !== DEFAULT_DIVISION) return stored ?? emptyState();
   if (!legacy && !stored) return emptyState();
   if (!legacy && stored) return stored;
   if (legacy && !stored) return (await migrateLegacy(legacy)) ?? legacy;
@@ -338,30 +481,31 @@ export async function loadPersistedState(): Promise<AppState> {
 
 let writeQueue: Promise<void> = Promise.resolve();
 let latestTicket = 0;
-let lastFingerprints: Record<PersistStore, string> | null = null;
+const lastFingerprintsByDivision: Partial<Record<DivisionId, Record<PersistStore, string>>> = {};
 
-export async function savePersistedState(state: AppState): Promise<string | null> {
+/** Сохранить состояние только выбранного подразделения. */
+export async function savePersistedState(state: AppState, division: DivisionId = readActiveDivision()): Promise<string | null> {
   const ticket = ++latestTicket;
   const job = writeQueue.then(async () => {
     if (ticket !== latestTicket) return null;
     let existing: AppState | null = null;
     try {
-      existing = await readDatabase();
+      existing = await loadDivisionState(division);
+      if (stateLooksEmpty(existing)) existing = null;
     } catch {
       existing = null;
     }
     const safe = protectIndependentData(state, existing);
     const nextFp = persistStoreFingerprints(safe);
-    const prevFp = lastFingerprints ?? (existing ? persistStoreFingerprints(existing) : null);
+    const prevFp = lastFingerprintsByDivision[division] ?? (existing ? persistStoreFingerprints(existing) : null);
     let stores = changedPersistStores(prevFp, nextFp);
-    // Никогда не затираем непустые прайсы/поставщиков пустой записью.
     if (stores.includes("prices") && safe.uploads.length === 0 && existing && existing.uploads.length > 0) {
       stores = stores.filter((name) => name !== "prices");
     }
     if (stores.includes("suppliers") && safe.suppliers.length === 0 && existing && existing.suppliers.length > 0) {
       stores = stores.filter((name) => name !== "suppliers");
     }
-    if (stores.length > 0) await writeDatabase(safe, stores);
+    if (stores.length > 0) await writeDivisionState(safe, division, stores);
     const merged = { ...(prevFp ?? nextFp) };
     for (const name of stores) merged[name] = nextFp[name];
     if (!stores.includes("prices") && existing && existing.uploads.length > 0) {
@@ -370,8 +514,8 @@ export async function savePersistedState(state: AppState): Promise<string | null
     if (!stores.includes("suppliers") && existing && existing.suppliers.length > 0) {
       merged.suppliers = persistStoreFingerprints(existing).suppliers;
     }
-    lastFingerprints = merged;
-    rememberPlace();
+    lastFingerprintsByDivision[division] = merged;
+    rememberPlace(division);
     return null;
   });
   writeQueue = job.then(
@@ -385,4 +529,9 @@ export async function savePersistedState(state: AppState): Promise<string | null
     if (name === "QuotaExceededError") return "Не удалось сохранить данные: память браузера заполнена.";
     return "Не удалось сохранить данные.";
   }
+}
+
+/** Сохранить несекретные заготовки подключений подразделения. */
+export async function saveDivisionConnections(division: DivisionId, connections: DivisionConnections): Promise<void> {
+  await writeDivisionState(emptyState(), division, [], connections);
 }

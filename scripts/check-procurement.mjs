@@ -111,11 +111,13 @@ const sasha = mondayCard("Саша", "sasha");
 sasha.responsible = "Оля";
 state = procurement.upsertSupplier(state, sasha);
 const morning = procurement.procurementBoard(state, new Date(2026, 9, 5, 8, 0, 0));
-const sashaMorning = morning.today.find((item) => item.supplierId === "sasha");
+const sashaMorning = morning.expected.find((item) => item.supplierId === "sasha");
 check("9 ожидаем прайс", sashaMorning?.freshness === "expected" && sashaMorning.text === "Ожидаем прайс" && sashaMorning.level === "waiting", sashaMorning?.text);
+check("9 ожидаем не дублируется в сегодня", !morning.today.some((item) => item.supplierId === "sasha" && item.cycleDate === sashaMorning?.cycleDate));
 const late = procurement.procurementBoard(state, new Date(2026, 9, 5, 10, 0, 0));
-const sashaLate = late.today.find((item) => item.supplierId === "sasha");
+const sashaLate = late.missing.find((item) => item.supplierId === "sasha");
 check("9 нет прайса", sashaLate?.freshness === "missing" && sashaLate.text === "Нет актуального прайса к закупке" && sashaLate.level === "critical", sashaLate?.text);
+check("9 просрочка не дублируется в сегодня", !late.today.some((item) => item.supplierId === "sasha" && item.cycleDate === sashaLate?.cycleDate));
 check("9 ответственный", sashaLate?.responsible === "Оля");
 check("9 ожидался", Boolean(sashaLate?.expectedAt));
 
@@ -258,6 +260,21 @@ reminded.schedule.reminders = [{ id: "r2", hoursBeforeDeadline: 2 }];
 const remindBoard = procurement.procurementBoard(procurement.upsertSupplier(storage.emptyState(), reminded), new Date(2026, 9, 5, 8, 0, 0));
 const remindItem = remindBoard.expected.find((item) => item.supplierId === "remind");
 check("напоминание", remindItem?.reminder === true && remindItem.text === "Ожидаем прайс" && remindItem.level === "attention", remindItem?.text);
+check("напоминание не дублируется в сегодня", !remindBoard.today.some((item) => item.supplierId === "remind"));
+
+let atlant = suppliers.createSupplier("атлант", "atlant");
+atlant.orderDays = [5];
+atlant.purchaseMode = "schedule";
+atlant.offerSource = "price";
+atlant.schedule.deadlineWeekday = 5;
+atlant.schedule.deadlineTime = "23:59";
+const atlantNow = new Date(2026, 8, 30, 12, 0, 0);
+const atlantBoard = procurement.procurementBoard(procurement.upsertSupplier(storage.emptyState(), atlant), atlantNow);
+const atlantExpected = atlantBoard.expected.filter((item) => item.supplierId === "atlant");
+const atlantUpcoming = atlantBoard.upcoming.filter((item) => item.supplierId === "atlant");
+check("CZ-09.1 событие один раз в ожидается", atlantExpected.length === 1 && atlantExpected[0].cycleDate === "2026-10-02", atlantExpected[0]?.cycleDate);
+check("CZ-09.1 то же событие не в ближайших", atlantUpcoming.length === 0);
+check("CZ-09.1 одна карточка поставщика", procurement.upsertSupplier(storage.emptyState(), atlant).suppliers.length === 1);
 
 const several = procurement.nextOrderDate([1, 4], new Date(2026, 9, 2, 12, 0, 0), petyaPlan.schedule);
 check("несколько дней ближайший понедельник", several === "2026-10-05", several);
