@@ -11,7 +11,6 @@ import { unitsConflict } from "../utils/units";
 import { Button, Field, FilterBar, controlClass } from "./Button";
 import { Card, Hint } from "./Card";
 import { CatalogPicker } from "./CatalogPicker";
-import { SourcedName } from "./SourceBadge";
 
 interface PickerState {
   key: string;
@@ -25,6 +24,18 @@ interface PendingBulk {
 }
 
 const OPEN_STATUS = new Set<MatchStatus>(["need", "review", "skipped", "missing"]);
+
+const headCell = "sticky top-0 z-10 bg-white px-2 py-1.5 text-left align-middle text-xs font-semibold text-brand shadow-[inset_0_-1px_0_#E5E7EB]";
+const bodyCell = "px-2 py-1.5 align-middle text-sm";
+
+function ClampText({ text }: { text: string }) {
+  const value = text || "—";
+  return (
+    <span className="line-clamp-2 w-full leading-snug" title={value}>
+      {value}
+    </span>
+  );
+}
 
 export function MatchingTab() {
   const {
@@ -294,14 +305,17 @@ export function MatchingTab() {
           </Card>
         ) : (
           <div className="max-h-[70vh] overflow-auto rounded-[10px] border border-slate-200 bg-white shadow-card">
-            <table className="w-full min-w-[720px] table-fixed border-collapse text-sm">
+            <table className="w-full table-fixed border-collapse text-sm">
+              <colgroup>
+                <col style={{ width: "28%" }} />
+                <col style={{ width: "12%" }} />
+                <col style={{ width: "18%" }} />
+                <col style={{ width: "42%" }} />
+              </colgroup>
               <thead>
                 <tr>
                   {["Номенклатура поставщика", "Поставщик", "Штрихкод", "Действие"].map((title) => (
-                    <th
-                      key={title}
-                      className="sticky top-0 z-10 bg-white px-3 py-2 text-left align-top text-xs font-semibold text-brand shadow-[inset_0_-1px_0_#E5E7EB]"
-                    >
+                    <th key={title} className={headCell}>
                       {title}
                     </th>
                   ))}
@@ -310,13 +324,17 @@ export function MatchingTab() {
               <tbody>
                 {rejectedVisible.slice(0, pager.count).map((item) => (
                   <tr key={item.id} className="border-b border-black/5 bg-slate-50">
-                    <td className="break-words px-3 py-2 align-top">
-                      <SourcedName kind="supplier">{item.traits.name}</SourcedName>
+                    <td className={bodyCell}>
+                      <ClampText text={item.traits.name} />
                     </td>
-                    <td className="break-words px-3 py-2 align-top">{item.supplier}</td>
-                    <td className="break-words px-3 py-2 align-top">{item.traits.barcode || "—"}</td>
-                    <td className="px-3 py-2 align-top">
-                      <Button variant="ghost" onClick={() => releaseMatch(item.id)}>
+                    <td className={bodyCell}>
+                      <ClampText text={item.supplier} />
+                    </td>
+                    <td className={bodyCell}>
+                      <ClampText text={item.traits.barcode || "—"} />
+                    </td>
+                    <td className={bodyCell}>
+                      <Button variant="ghost" className="!px-1.5 !py-0.5 whitespace-nowrap" onClick={() => releaseMatch(item.id)}>
                         Вернуть в работу
                       </Button>
                     </td>
@@ -331,44 +349,40 @@ export function MatchingTab() {
           <Hint>{filter === "resolved" && priceDone ? "Прайс полностью обработан." : "Нет товаров в этом фильтре."}</Hint>
         </Card>
       ) : (
-        <div className="max-h-[70vh] overflow-auto rounded-[10px] border border-slate-200 bg-white shadow-card">
-          <table className="w-full min-w-[1080px] table-fixed border-collapse text-sm">
+        <div className="max-h-[70vh] overflow-x-auto overflow-y-auto rounded-[10px] border border-slate-200 bg-white shadow-card">
+          <table className="w-full table-fixed border-collapse text-sm">
             <colgroup>
-              <col style={{ width: "11%" }} />
-              <col style={{ width: "15%" }} />
-              <col style={{ width: "10%" }} />
-              <col style={{ width: "18%" }} />
+              <col style={{ width: "3%" }} />
               <col style={{ width: "7%" }} />
-              <col style={{ width: "16%" }} />
-              <col style={{ width: "10%" }} />
-              <col style={{ width: "19%" }} />
+              <col style={{ width: "21%" }} />
+              <col style={{ width: "21%" }} />
+              <col style={{ width: "6%" }} />
+              <col style={{ width: "14%" }} />
+              <col style={{ width: "8%" }} />
+              <col style={{ width: "20%" }} />
             </colgroup>
             <thead>
               <tr>
-                <th className="sticky top-0 z-10 bg-white px-2 py-2 text-left align-top text-xs font-semibold text-brand shadow-[inset_0_-1px_0_#E5E7EB]">
-                  <label className="flex items-start gap-2">
-                    <input
-                      type="checkbox"
-                      className="mt-0.5"
-                      checked={allChecked}
-                      ref={(node) => {
-                        if (node) node.indeterminate = someChecked;
-                      }}
-                      onChange={toggleAll}
-                    />
-                    <span>Выбрать все отображаемые</span>
-                  </label>
+                <th className={`${headCell} w-10 max-w-[44px] px-1 text-center`} title="Выбрать все отображаемые">
+                  <input
+                    type="checkbox"
+                    className="align-middle"
+                    title="Выбрать все отображаемые"
+                    aria-label="Выбрать все отображаемые"
+                    checked={allChecked}
+                    ref={(node) => {
+                      if (node) node.indeterminate = someChecked;
+                    }}
+                    onChange={toggleAll}
+                  />
                 </th>
-                {["Номенклатура поставщика", "Поставщик", "Предлагаемая наша номенклатура", "Уверенность", "Почему", "Статус", "Действие"].map(
-                  (title) => (
-                    <th
-                      key={title}
-                      className="sticky top-0 z-10 bg-white px-3 py-2 text-left align-top text-xs font-semibold text-brand shadow-[inset_0_-1px_0_#E5E7EB]"
-                    >
-                      {title}
-                    </th>
-                  ),
-                )}
+                <th className={headCell}>Поставщик</th>
+                <th className={headCell}>Номенклатура поставщика</th>
+                <th className={headCell}>Предлагаемая наша номенклатура</th>
+                <th className={`${headCell} text-center`}>Уверенность</th>
+                <th className={headCell}>Почему</th>
+                <th className={headCell}>Статус</th>
+                <th className={headCell}>Действие</th>
               </tr>
             </thead>
             <tbody>
@@ -385,6 +399,8 @@ export function MatchingTab() {
                       : statusLabel(match.status);
                 const locked = match.status === "confirmed" || match.status === "picked";
                 const picked = selected.has(row.key);
+                const ours = ourNomenclature(match.code, catalog);
+                const reason = match.reason || "—";
                 return (
                   <tr
                     key={row.key}
@@ -398,7 +414,7 @@ export function MatchingTab() {
                       selectRow(row.key, event);
                     }}
                   >
-                    <td className="px-2 py-2 align-top">
+                    <td className={`${bodyCell} px-1 text-center`}>
                       <input
                         type="checkbox"
                         aria-label={`Выбрать ${row.name}`}
@@ -407,35 +423,48 @@ export function MatchingTab() {
                         onChange={() => toggleOne(row.key)}
                       />
                     </td>
-                    <td className="break-words px-3 py-2 align-top">
-                      <SourcedName kind="supplier">{row.name}</SourcedName>
+                    <td className={bodyCell}>
+                      <ClampText text={row.supplier} />
                     </td>
-                    <td className="break-words px-3 py-2 align-top">{row.supplier}</td>
-                    <td className="break-words px-3 py-2 align-top">
-                      {match.code ? (
-                        <SourcedName kind="1c">{ourNomenclature(match.code, catalog)}</SourcedName>
-                      ) : (
-                        ourNomenclature(match.code, catalog)
-                      )}
+                    <td className={bodyCell}>
+                      <ClampText text={row.name} />
                     </td>
-                    <td className={`break-words px-3 py-2 align-top ${confidenceClass(match.confidence)}`}>
+                    <td className={bodyCell}>
+                      <ClampText text={ours} />
+                    </td>
+                    <td className={`${bodyCell} text-center tabular-nums ${confidenceClass(match.confidence)}`}>
                       {confidenceLabel(match.confidence)}
                     </td>
-                    <td className="break-words px-3 py-2 align-top">{match.reason || "—"}</td>
-                    <td className="break-words px-3 py-2 align-top">{label}</td>
-                    <td className="px-3 py-2 align-top">
-                      <div className="flex flex-wrap gap-1">
-                        <Button variant="yes" disabled={!match.code || locked} onClick={() => confirmMatch(row.key)}>
+                    <td className={bodyCell}>
+                      <ClampText text={reason} />
+                    </td>
+                    <td className={bodyCell}>
+                      <ClampText text={label} />
+                    </td>
+                    <td className={bodyCell}>
+                      <div className="flex flex-nowrap items-center gap-1">
+                        <Button
+                          variant="yes"
+                          className="shrink-0 !px-1.5 !py-0.5 whitespace-nowrap"
+                          disabled={!match.code || locked}
+                          onClick={() => confirmMatch(row.key)}
+                        >
                           Да
                         </Button>
                         <Button
                           variant="ghost"
+                          className="shrink-0 !px-1.5 !py-0.5 whitespace-nowrap"
                           disabled={state.catalog.length === 0 || locked}
                           onClick={(event) => openPicker(row.key, event.currentTarget)}
                         >
                           Выбрать другой
                         </Button>
-                        <Button variant="ghost" disabled={match.status === "rejected"} onClick={() => rejectMatch(row.key)}>
+                        <Button
+                          variant="ghost"
+                          className="shrink-0 !px-1.5 !py-0.5 whitespace-nowrap"
+                          disabled={match.status === "rejected"}
+                          onClick={() => rejectMatch(row.key)}
+                        >
                           Не работаем
                         </Button>
                       </div>
