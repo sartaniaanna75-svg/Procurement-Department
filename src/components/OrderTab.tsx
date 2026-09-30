@@ -5,8 +5,11 @@ import { formatPrice, plural } from "../utils/format";
 import { buildOrder, countReadyMatches } from "../utils/order";
 import { Button } from "./Button";
 import { Card, Hint } from "./Card";
+import { DemandPanel } from "./DemandPanel";
 
-export function OrderTab() {
+type OrderSection = "demand" | "compare" | "ready";
+
+function LegacyOrderBuilder() {
   const { state, confirmOrder, markAbsent } = useAppState();
   const [built, setBuilt] = useState(false);
   const readyCount = countReadyMatches(state);
@@ -18,11 +21,14 @@ export function OrderTab() {
 
   return (
     <div className="space-y-4">
-      <Card title="Заказ на сегодня">
+      <Card title="Заказ из подтверждённых сопоставлений">
         {readyCount === 0 ? (
           <Hint>
-            Подтвердите товары на <Link className="text-brand underline" to="/matching">вкладке «Сопоставление»</Link>.
-            Кнопка «Собрать заказ» станет активной, когда появится хотя бы одна подтверждённая или выбранная позиция.
+            Подтвердите товары на{" "}
+            <Link className="text-brand underline" to="/matching">
+              вкладке «Сопоставление»
+            </Link>
+            . Кнопка «Собрать заказ» станет активной, когда появится хотя бы одна подтверждённая или выбранная позиция.
           </Hint>
         ) : (
           <Hint>
@@ -88,6 +94,34 @@ export function OrderTab() {
           ) : null}
         </article>
       ))}
+    </div>
+  );
+}
+
+export function OrderTab() {
+  const [section, setSection] = useState<OrderSection>("demand");
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap gap-2">
+        <Button variant="filter" active={section === "demand"} onClick={() => setSection("demand")}>
+          Потребность
+        </Button>
+        <Button variant="filter" active={section === "compare"} onClick={() => setSection("compare")}>
+          Сравнение поставщиков
+        </Button>
+        <Button variant="filter" active={section === "ready"} onClick={() => setSection("ready")}>
+          Готовые заказы
+        </Button>
+      </div>
+
+      {section === "demand" ? <DemandPanel /> : null}
+      {section === "compare" ? (
+        <Card title="Сравнение поставщиков">
+          <Hint>Раздел будет в следующем этапе. Сейчас тестируем только «сколько товара нужно».</Hint>
+        </Card>
+      ) : null}
+      {section === "ready" ? <LegacyOrderBuilder /> : null}
     </div>
   );
 }
