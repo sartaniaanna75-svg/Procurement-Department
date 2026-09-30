@@ -287,8 +287,8 @@ export function DemandPanel() {
             <FileSlot label="Себестоимость — организация 1" kind="costOrg1" hint="Контроль межфирменных передач" />
             <FileSlot label="Себестоимость — организация 2" kind="costOrg2" hint="Контроль межфирменных передач" />
           </div>
-          {error ? <p className="mt-3 text-sm text-danger">{error}</p> : null}
-          {info ? <p className="mt-3 text-sm text-ok">{info}</p> : null}
+          {error ? <p className="mt-3 rounded-md border border-[#F0D5D5] bg-[#FDF4F4] px-2 py-1.5 text-sm text-danger">{error}</p> : null}
+          {info ? <p className="mt-3 rounded-md border border-[#D5E8DC] bg-[#F3F8F4] px-2 py-1.5 text-sm text-ok">{info}</p> : null}
           {busy ? <p className="mt-2 text-sm text-mute">Читаем файл…</p> : null}
         </Card>
       </div>
@@ -297,7 +297,7 @@ export function DemandPanel() {
 
   return (
     <div className="space-y-4">
-      <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950">
+      <div className="rounded-lg border border-[#EBD9A8] bg-[#FFFBF0] px-3 py-2 text-sm text-[#8A6A1E]">
         Потребность — тестовый режим. Расчёт не создаёт заказы и не отправляет данные в 1С.
       </div>
 
@@ -338,8 +338,8 @@ export function DemandPanel() {
           />
           Учитывать ожидаемые поступления в расчёте
         </label>
-        {error ? <p className="mt-2 text-sm text-danger">{error}</p> : null}
-        {info ? <p className="mt-2 text-sm text-ok">{info}</p> : null}
+        {error ? <p className="mt-2 rounded-md border border-[#F0D5D5] bg-[#FDF4F4] px-2 py-1.5 text-sm text-danger">{error}</p> : null}
+        {info ? <p className="mt-2 rounded-md border border-[#D5E8DC] bg-[#F3F8F4] px-2 py-1.5 text-sm text-ok">{info}</p> : null}
       </Card>
 
       <Card title="Потребность">

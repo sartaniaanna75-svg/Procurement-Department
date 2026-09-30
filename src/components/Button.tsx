@@ -18,7 +18,7 @@ const variants: Record<Variant, string> = {
 };
 
 export function Button({ variant = "primary", active = false, className = "", type = "button", ...props }: ButtonProps) {
-  const filterClass = active ? "bg-brand text-white hover:bg-[#1e446b]" : "bg-[#E5E7EB] text-ink hover:bg-[#D1D5DB]";
+  const filterClass = active ? "nav-chip-active" : "nav-chip";
   const variantClass = variant === "filter" ? `${variants.filter} ${filterClass}` : variants[variant];
   return (
     <button

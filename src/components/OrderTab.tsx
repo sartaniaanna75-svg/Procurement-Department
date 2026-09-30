@@ -103,16 +103,16 @@ export function OrderTab() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap gap-2">
-        <Button variant="filter" active={section === "demand"} onClick={() => setSection("demand")}>
+      <div className="flex flex-wrap gap-2 rounded-lg border border-slate-200 bg-white p-2">
+        <button type="button" className={`nav-sub ${section === "demand" ? "nav-sub-active" : ""}`} onClick={() => setSection("demand")}>
           Потребность
-        </Button>
-        <Button variant="filter" active={section === "compare"} onClick={() => setSection("compare")}>
+        </button>
+        <button type="button" className={`nav-sub ${section === "compare" ? "nav-sub-active" : ""}`} onClick={() => setSection("compare")}>
           Сравнение поставщиков
-        </Button>
-        <Button variant="filter" active={section === "ready"} onClick={() => setSection("ready")}>
+        </button>
+        <button type="button" className={`nav-sub ${section === "ready" ? "nav-sub-active" : ""}`} onClick={() => setSection("ready")}>
           Готовые заказы
-        </Button>
+        </button>
       </div>
 
       {section === "demand" ? <DemandPanel /> : null}

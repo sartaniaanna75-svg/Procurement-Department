@@ -4,14 +4,15 @@ import type { SupplierCard } from "../types";
 import { dateISO, formatDay, isoWeekday, parseDay, procurementBoard, type CycleStatus } from "../utils/procurement";
 import { Card, Hint } from "./Card";
 
-type Paint = "ok" | "alert" | "plain";
+type Paint = "ok" | "alert" | "attention" | "plain";
 
-/** Красный только когда по уже рассчитанному статусу нужно внимание. До начала окна ожидания карточка белая. */
+/** Красный — критично; жёлтый — ждём/проверить; зелёный — прайс получен. */
 function paint(item: CycleStatus, card: SupplierCard | undefined, now: Date): Paint {
   if (item.freshness === "received") return "ok";
   if (item.freshness === "not_required") return "plain";
   if (item.freshness === "expected" && !waitingStarted(card, item.cycleDate, now)) return "plain";
-  if (item.freshness === "expected" || item.freshness === "missing" || item.freshness === "stale") return "alert";
+  if (item.freshness === "expected") return "attention";
+  if (item.freshness === "missing" || item.freshness === "stale") return "alert";
   return "plain";
 }
 
@@ -34,12 +35,14 @@ function receivedLabel(value: string): string {
 const boxClass: Record<Paint, string> = {
   ok: "border-[#D5E8DC] bg-[#F3F8F4]",
   alert: "border-[#F0D5D5] bg-[#FDF4F4]",
+  attention: "border-[#EBD9A8] bg-[#FFFBF0]",
   plain: "border-slate-200 bg-white",
 };
 
 const statusClass: Record<Paint, string> = {
   ok: "text-sm font-semibold text-ok",
   alert: "text-sm font-semibold text-[#9F2D2D]",
+  attention: "text-sm font-semibold text-[#8A6A1E]",
   plain: "text-sm text-ink",
 };
 
